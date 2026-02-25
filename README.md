@@ -48,26 +48,6 @@ The OrchestrationAgent coordinates execution and validation flow.
 
 ## Repository Structure
 
-
-.
-├── agents/
-│ ├── topology_agent.py
-│ ├── sizing_agent.py
-│ ├── constraint_agent.py
-│ ├── simulation_agent.py
-│ └── orchestration_agent.py
-│
-├── core/
-│ ├── llm_interface.py
-│ └── shared_memory.py
-│
-├── llm/
-│ └── local_llm_stub.py
-│
-├── main.py
-└── README.md
-
-
 - `agents/` — Independent design agents and workflow control
 - `memory/` — Shared state and history logging
 - `core/` — Structured design state and memory between agents
