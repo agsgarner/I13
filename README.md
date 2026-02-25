@@ -128,11 +128,11 @@ python main.py
 
 ## Authors
 
-Austin Garner
-Manasvi Perisetty
-Anika Sridhar
-Emmanuel Martinez
-Arohan Shrestha
+Austin Garner,
+Manasvi Perisetty,
+Anika Sridhar,
+Emmanuel Martinez,
+Arohan Shrestha,
 Emmanuel Ramirez
 
 Capstone Design Project
