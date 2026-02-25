@@ -1,28 +1,34 @@
-#I13/agents/simulation_agent.py
+# I13/agents/simulation_agent.py
 
 from agents.base_agent import BaseAgent
+from core.shared_memory import SharedMemory
+import math
+
 
 class SimulationAgent(BaseAgent):
-    """
-    Placeholder simulation stage.
-    """
 
-    def run(self, memory):
+    def run(self, memory: SharedMemory):
 
         topology = memory.read("selected_topology")
         sizing = memory.read("sizing")
 
         if topology == "rc_lowpass":
+
             R = sizing["R_ohm"]
             C = sizing["C_f"]
-            fc = 1 / (2 * 3.141592653589793 * R * C)
 
-            simulation = {
-                "estimated_fc_hz": fc
+            fc = 1 / (2 * math.pi * R * C)
+
+            results = {
+                "fc_hz": fc,
+                "gain_db": 0,
+                "power_mw": 0
             }
 
-            memory.write("simulation_data", simulation)
+            memory.write("simulation_results", results)
             memory.write("status", "simulation_complete")
-            return
+
+            return results
 
         memory.write("status", "simulation_failed")
+        return None

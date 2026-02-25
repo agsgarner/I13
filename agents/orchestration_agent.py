@@ -4,48 +4,71 @@ from core.shared_memory import SharedMemory
 
 
 class OrchestrationAgent:
-    """
-    Controls workflow between agents.
-    """
 
-    def __init__(self, memory, topology_agent, sizing_agent, constraint_agent, simulation_agent):
+    def __init__(
+        self,
+        memory,
+        topology_agent,
+        sizing_agent,
+        constraint_agent,
+        simulation_agent,
+        refinement_agent
+    ):
+
         self.memory = memory
         self.topology_agent = topology_agent
         self.sizing_agent = sizing_agent
         self.constraint_agent = constraint_agent
         self.simulation_agent = simulation_agent
+        self.refinement_agent = refinement_agent
 
     def run(self):
 
-        max_attempts = 3
+        max_iterations = 3
 
-        for attempt in range(max_attempts):
+        for iteration in range(max_iterations):
 
-            # Select topology
+            print(f"Iteration {iteration+1}")
+
+            # topology
             self.topology_agent.run(self.memory)
 
             if self.memory.read("status") != "topology_selected":
-                self.memory.write("status", "orchestration_failed")
-                return self.memory.get_full_state()
-            
-            # Generate sizing
+                return self.fail()
+
+            # sizing
             self.sizing_agent.run(self.memory)
 
             if self.memory.read("status") != "sizing_complete":
-                self.memory.write("status", "sizing_failed")
-                return self.memory.get_full_state()
-            
-            # Validate constratints
+                return self.fail()
+
+            # constraints
             _, report = self.constraint_agent.run(self.memory)
 
-            if report.passed:
+            if not report.passed:
+                return self.fail()
 
-                # Simulation
-                self.simulation_agent.run(self.memory)
+            # simulation
+            self.simulation_agent.run(self.memory)
 
-                self.memory.write("status", "design_validated")
-                return self.memory.get_full_state()
+            if self.memory.read("status") != "simulation_complete":
+                return self.fail()
 
-        # If all attempts fail
+            # refinement
+            self.refinement_agent.run(self.memory)
+
+            if self.memory.read("status") == "refined":
+                continue
+
+            self.memory.write("status", "design_validated")
+            return self.memory.get_full_state()
+
         self.memory.write("status", "design_invalid_after_retries")
+
+        return self.memory.get_full_state()
+
+    def fail(self):
+
+        self.memory.write("status", "orchestration_failed")
+
         return self.memory.get_full_state()
