@@ -134,5 +134,3 @@ Anika Sridhar,
 Emmanuel Martinez,
 Arohan Shrestha,
 Emmanuel Ramirez
-
-Capstone Design Project
