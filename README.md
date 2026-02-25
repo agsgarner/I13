@@ -1,7 +1,5 @@
 # LLM Customized for Analog Circuit Design
 
-# Capstone Design — LLM-Orchestrated Analog Filter Framework
-
 ## Overview
 
 This repository contains a modular, multi-agent framework for analog filter design.
