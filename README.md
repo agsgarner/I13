@@ -13,7 +13,7 @@ The system demonstrates how structured AI agents can collaborate through shared 
 - Perform lightweight simulation
 - Log design state transitions
 
-The focus of this project is architectural structure, orchestration, and traceability — not prompt-only AI usage.
+The focus of this project is architectural structure, orchestration, and traceability
 
 ---
 
