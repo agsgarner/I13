@@ -22,19 +22,7 @@ The focus of this project is architectural structure, orchestration, and traceab
 The framework follows a shared-memory multi-agent pattern:
 
 
-Specification
-↓
-TopologyAgent
-↓
-SizingAgent
-↓
-ConstraintAgent
-↓
-SimulationAgent
-↓
-OrchestrationAgent
-↓
-SharedMemory (state + history)
+Specification -> TopologyAgent -> SizingAgent -> ConstraintAgent -> SimulationAgent -> RefinementAgent -> OrchestrationAgent
 
 
 Each agent:
