@@ -92,25 +92,6 @@ The OrchestrationAgent coordinates execution and validation flow.
 
 ---
 
-## Dataset
-
-This project utilizes the Masala-CHAI large-scale SPICE netlist dataset for analog circuits.
-
-The dataset is **not included in this repository**.
-
-To use the dataset:
-
-1. Download it from the official Masala-CHAI repository.
-2. Extract it into a local `data/` directory.
-3. Ensure `data/` is excluded via `.gitignore`.
-
-The dataset is omitted to:
-- Avoid repository bloat  
-- Maintain clean version control  
-- Follow best practices for ML research repositories  
-
----
-
 ## Example Use Case
 
 Input:
@@ -163,6 +144,25 @@ python main.py
 
 ---
 
+## Dataset
+
+This project utilizes the Masala-CHAI large-scale SPICE netlist dataset for analog circuits.
+
+The dataset is **not included in this repository**.
+
+To use the dataset:
+
+1. Download it from the official Masala-CHAI repository.
+2. Extract it into a local `data/` directory.
+3. Ensure `data/` is excluded via `.gitignore`.
+
+The dataset is omitted to:
+- Avoid repository bloat  
+- Maintain clean version control  
+- Follow best practices for ML research repositories  
+
+---
+
 ## Project Goals
 
 - Demonstrate structured AI orchestration
@@ -179,29 +179,6 @@ python main.py
 - Optimization loops
 - Multi-stage filter synthesis
 - Expanded constraint reasoning
-
----
-
-## Citation
-
-If you use the Masala-CHAI dataset in your work, please cite:
-
-Bhandari, J., Bhat, V., He, Y., Rahmani, H., Garg, S., & Karri, R. (2025).  
-*Masala-CHAI: A Large-Scale SPICE Netlist Dataset for Analog Circuits by Harnessing AI*.  
-arXiv:2411.14299.
-
-BibTeX:
-
-```bibtex
-@misc{bhandari2025masalachailargescalespicenetlist,
-      title={Masala-CHAI: A Large-Scale SPICE Netlist Dataset for Analog Circuits by Harnessing AI}, 
-      author={Jitendra Bhandari and Vineet Bhat and Yuheng He and Hamed Rahmani and Siddharth Garg and Ramesh Karri},
-      year={2025},
-      eprint={2411.14299},
-      archivePrefix={arXiv},
-      primaryClass={cs.AR},
-      url={https://arxiv.org/abs/2411.14299}
-}
 
 ---
 
