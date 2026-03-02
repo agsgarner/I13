@@ -182,6 +182,26 @@ The dataset is omitted to:
 
 ---
 
+## Citation
+
+If you use the Masala-CHAI dataset in your work, please cite:
+
+Bhandari, J., Bhat, V., He, Y., Rahmani, H., Garg, S., & Karri, R. (2025).
+Masala-CHAI: A Large-Scale SPICE Netlist Dataset for Analog Circuits by Harnessing AI.
+arXiv:2411.14299.
+
+BibTeX:
+
+@misc{bhandari2025masalachailargescalespicenetlist,
+      title={Masala-CHAI: A Large-Scale SPICE Netlist Dataset for Analog Circuits by Harnessing AI}, 
+      author={Jitendra Bhandari and Vineet Bhat and Yuheng He and Hamed Rahmani and Siddharth Garg and Ramesh Karri},
+      year={2025},
+      eprint={2411.14299},
+      archivePrefix={arXiv},
+      primaryClass={cs.AR},
+      url={https://arxiv.org/abs/2411.14299}
+}
+
 ## Authors
 
 Austin Garner,
