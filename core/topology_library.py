@@ -9,6 +9,13 @@ TOPOLOGY_LIBRARY = {
         "complexity": "low"
     },
 
+    "common_source_res_load": {
+        "name": "Common-Source w/ Resistive Load",
+        "category": "amplifier",
+        "constraint_template": "amplifier_single_stage",
+        "complexity": "low"
+    },
+
     "two_stage_cs_res_load": {
         "name": "2-Stage Common-Source w/ Resistive Load",
         "category": "amplifier",

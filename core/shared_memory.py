@@ -9,11 +9,16 @@ class SharedMemory:
         self.state = {
             "specification": None,
             "selected_topology": None,
+            "topology_confidence": None,
+            "constraint_template": None,
             "constraints": None,
             "sizing": None,
+            "sizing_report": None,
             "netlist": None,
             "constraints_report": None,
             "simulation_data": None,
+            "simulation_results": None,
+            "refinement_report": None,
             "status": "initialized",
             "history": []
         }
@@ -34,3 +39,10 @@ class SharedMemory:
 
     def get_full_state(self):
         return self.state
+
+    def load_state(self, data, overwrite=True):
+        if not isinstance(data, dict):
+            raise ValueError("State must be a dict")
+        for key, value in data.items():
+            if overwrite or key not in self.state:
+                self.state[key] = value

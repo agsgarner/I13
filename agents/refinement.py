@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
+from agents.design_status import DesignStatus
+
 
 @dataclass
 class RefinementReport:
@@ -27,7 +29,12 @@ class RefinementAgent:
         constraints = state.get("constraints") or {}
         topo = state.get("selected_topology") or constraints.get("circuit_type")
         sizing = state.get("sizing") or {}
-        sim = (state.get("sim") or {}).get("metrics") or state.get("sim_metrics") or {}
+        sim = (
+            (state.get("sim") or {}).get("metrics")
+            or state.get("sim_metrics")
+            or state.get("simulation_results")
+            or {}
+        )
 
         changes: Dict[str, Any] = {}
         notes: List[str] = []
@@ -35,7 +42,7 @@ class RefinementAgent:
         if not topo:
             report = RefinementReport(False, {}, ["No topology found"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_skipped"
+            state["status"] = DesignStatus.REFINEMENT_SKIPPED
             return state, report
 
         if topo == "rc_lowpass":
@@ -53,7 +60,7 @@ class RefinementAgent:
             next_action="stop",
         )
         state["refinement_report"] = report.__dict__
-        state["status"] = "refinement_skipped"
+        state["status"] = DesignStatus.REFINEMENT_SKIPPED
         return state, report
 
     def _clamp_step(self, factor: float) -> float:
@@ -77,13 +84,13 @@ class RefinementAgent:
         if target_fc is None:
             report = RefinementReport(False, {}, ["Missing target_fc_hz"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         if fc_sim is None:
             report = RefinementReport(False, {}, ["Missing sim fc_hz (run SPICE first)"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         R = float(sizing.get("R_ohm", 0.0))
@@ -91,14 +98,14 @@ class RefinementAgent:
         if R <= 0 or C <= 0:
             report = RefinementReport(False, {}, ["Invalid R_ohm or C_f in sizing"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         ratio = fc_sim / target_fc
         if ratio <= 0:
             report = RefinementReport(False, {}, ["Bad fc ratio"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         # Want fc_sim -> target_fc.
@@ -119,7 +126,7 @@ class RefinementAgent:
             next_action="rerun_spice",
         )
         state["refinement_report"] = report.__dict__
-        state["status"] = "refined"
+        state["status"] = DesignStatus.REFINED
         return state, report
 
     def _refine_common_source(
@@ -145,7 +152,7 @@ class RefinementAgent:
         if W is None or I is None or RD is None:
             report = RefinementReport(False, {}, ["Missing sizing keys (W_m, I_bias, R_D)"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         W = float(W)
@@ -227,7 +234,7 @@ class RefinementAgent:
 
         report = RefinementReport(changed=changed, changes=changes, notes=notes, next_action=next_action)
         state["refinement_report"] = report.__dict__
-        state["status"] = "refined" if changed else "refinement_no_change"
+        state["status"] = DesignStatus.REFINED if changed else DesignStatus.REFINEMENT_NO_CHANGE
         return state, report
 
 

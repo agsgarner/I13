@@ -22,4 +22,6 @@ class LocalLLMStub(LLMInterface):
         if "current mirror" in prompt_lower:
             return {"topology": "current_mirror", "confidence": 0.85}
 
+        return {"topology": "unknown", "confidence": 0.1}
+
         return {"topology": "common_source_res_load", "confidence": 0.75}

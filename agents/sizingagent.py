@@ -22,7 +22,7 @@ class SizingAgent:
         if topology == "rc_lowpass":
             return self._size_rc(state, constraints)
 
-        if topology == "common_source_res_load":
+        if topology in ("common_source_res_load", "common_source"):
             return self._size_common_source(state, constraints)
 
         if topology == "diff_pair":
@@ -32,7 +32,6 @@ class SizingAgent:
             return self._size_current_mirror(state, constraints)
 
         return state, SizingReport(False, [f"Sizing not implemented for {topology}"])
-
 
     def _size_rc(self, state, constraints):
         fc = constraints.get("target_fc_hz", 1e3)
@@ -47,7 +46,6 @@ class SizingAgent:
 
         return state, SizingReport(True, ["RC sized from target cutoff"])
 
-
     def _size_common_source(self, state, constraints):
         vdd = constraints.get("supply_v", 1.8)
         gain_db = constraints.get("target_gain_db", 20)
@@ -57,7 +55,7 @@ class SizingAgent:
 
         I_bias = (power_limit_mw / 1000) / vdd
 
-        gm_target = gain_linear / 5000  # assume RD ≈ 5kΩ baseline
+        gm_target = gain_linear / 5000  # assume RD ~= 5k ohm baseline
         Vov = 0.2
         W_over_L = 2 * I_bias / (1e-3 * Vov**2)
 
@@ -69,7 +67,6 @@ class SizingAgent:
         }
 
         return state, SizingReport(True, ["Common-source initial sizing complete"])
-
 
     def _size_diff_pair(self, state, constraints):
         vdd = constraints.get("supply_v", 1.8)
@@ -90,7 +87,6 @@ class SizingAgent:
         }
 
         return state, SizingReport(True, ["Diff pair initial sizing complete"])
-
 
     def _size_current_mirror(self, state, constraints):
         I_out = constraints.get("target_iout_a", 100e-6)

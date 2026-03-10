@@ -4,7 +4,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
 from core.shared_memory import SharedMemory
+from core.topology_library import TOPOLOGY_LIBRARY
 from agents.base_agent import BaseAgent
+from agents.design_status import DesignStatus
 
 
 @dataclass
@@ -63,7 +65,7 @@ class ConstraintAgent(BaseAgent):
         "filter_rc": ["R_ohm", "C_f"],
 
         "amplifier_single_stage": [
-            "W", "L", "I_bias"
+            "W_m", "L_m", "R_D", "I_bias"
         ],
 
         "amplifier_two_stage": [
@@ -87,6 +89,27 @@ class ConstraintAgent(BaseAgent):
         "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"]
     }
 
+    TOPOLOGY_SIZING_OVERRIDES = {
+        "rc_lowpass": ["R_ohm", "C_f"],
+        "common_source": ["W_m", "L_m", "R_D", "I_bias"],
+        "common_source_res_load": ["W_m", "L_m", "R_D", "I_bias"],
+        "diff_pair": ["W_in", "L_in", "W_tail", "L_tail", "I_tail", "R_load"],
+        "current_mirror": ["W_ref", "L_ref", "W_out", "L_out", "I_ref"],
+    }
+
+    def _resolve_template(self, topology_key: str, state: Dict[str, Any]) -> str:
+        template = state.get("constraint_template")
+        if template:
+            return template
+        if topology_key in TOPOLOGY_LIBRARY:
+            return TOPOLOGY_LIBRARY[topology_key]["constraint_template"]
+        return topology_key or "unknown"
+
+    def _required_sizing(self, topology_key: str, template: str) -> List[str]:
+        if topology_key in self.TOPOLOGY_SIZING_OVERRIDES:
+            return self.TOPOLOGY_SIZING_OVERRIDES[topology_key]
+        return self.REQUIRED_SIZING_KEYS.get(template, [])
+
     def run(self, memory: SharedMemory) -> Tuple[Dict[str, Any], ConstraintReport]:
 
         issues: List[str] = []
@@ -107,12 +130,12 @@ class ConstraintAgent(BaseAgent):
         if issues:
             report = ConstraintReport(False, issues, warnings)
             memory.write("constraints_report", report.__dict__)
-            memory.write("status", "constraints_failed")
+            memory.write("status", DesignStatus.CONSTRAINTS_FAILED)
             return state, report
 
-        template = topology_key
+        template = self._resolve_template(topology_key, state)
         required_constraints = self.REQUIRED_CONSTRAINT_KEYS.get(template, [])
-        required_sizing = self.REQUIRED_SIZING_KEYS.get(template, [])
+        required_sizing = self._required_sizing(topology_key, template)
 
         for key in required_constraints:
             if constraints.get(key) is None:
@@ -160,7 +183,7 @@ class ConstraintAgent(BaseAgent):
         )
 
         memory.write("constraints_report", report.__dict__)
-        memory.write("status", "constraints_ok" if passed else "constraints_failed")
+        memory.write("status", DesignStatus.CONSTRAINTS_OK if passed else DesignStatus.CONSTRAINTS_FAILED)
 
         return state, report
     

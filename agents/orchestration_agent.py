@@ -1,6 +1,8 @@
 # I13/agents/orchestration_agent.py
 
+from agents.design_status import DesignStatus
 from core.shared_memory import SharedMemory
+from core.topology_library import TOPOLOGY_LIBRARY
 
 
 class OrchestrationAgent:
@@ -31,16 +33,25 @@ class OrchestrationAgent:
             print(f"Iteration {iteration+1}")
 
             # topology
-            self.topology_agent.run(self.memory)
+            if self.memory.read("selected_topology") is None:
+                self.topology_agent.run(self.memory)
 
-            if self.memory.read("status") != "topology_selected":
-                return self.fail()
+                if self.memory.read("status") != DesignStatus.TOPOLOGY_SELECTED:
+                    return self.fail()
+            else:
+                self.memory.write("status", DesignStatus.TOPOLOGY_SELECTED)
+                topology = self.memory.read("selected_topology")
+                if topology in TOPOLOGY_LIBRARY and self.memory.read("constraint_template") is None:
+                    self.memory.write("constraint_template", TOPOLOGY_LIBRARY[topology]["constraint_template"])
 
             # sizing
-            self.sizing_agent.run(self.memory)
+            if self.memory.read("sizing") is None:
+                self.sizing_agent.run(self.memory)
 
-            if self.memory.read("status") != "sizing_complete":
-                return self.fail()
+                if self.memory.read("status") != DesignStatus.SIZING_COMPLETE:
+                    return self.fail()
+            else:
+                self.memory.write("status", DesignStatus.SIZING_COMPLETE)
 
             # constraints
             _, report = self.constraint_agent.run(self.memory)
@@ -51,24 +62,27 @@ class OrchestrationAgent:
             # simulation
             self.simulation_agent.run(self.memory)
 
-            if self.memory.read("status") != "simulation_complete":
+            if self.memory.read("status") != DesignStatus.SIMULATION_COMPLETE:
                 return self.fail()
 
             # refinement
             self.refinement_agent.run(self.memory)
+            status = self.memory.read("status")
 
-            if self.memory.read("status") == "refined":
+            if status == DesignStatus.REFINED:
                 continue
 
-            self.memory.write("status", "design_validated")
-            return self.memory.get_full_state()
+            if status in (DesignStatus.REFINEMENT_SKIPPED, DesignStatus.REFINEMENT_NO_CHANGE):
+                self.memory.write("status", DesignStatus.DESIGN_VALIDATED)
+                return self.memory.get_full_state()
 
-        self.memory.write("status", "design_invalid_after_retries")
+            return self.fail()
+
+        self.memory.write("status", DesignStatus.DESIGN_INVALID_AFTER_RETRIES)
 
         return self.memory.get_full_state()
 
     def fail(self):
-
-        self.memory.write("status", "orchestration_failed")
+        self.memory.write("status", DesignStatus.ORCHESTRATION_FAILED)
 
         return self.memory.get_full_state()
