@@ -1,0 +1,12 @@
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Generated artifacts
+char_transformer.pt
+*.pt
+
+# Local datasets and outputs
+data/

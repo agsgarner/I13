@@ -1,5 +1,7 @@
 # I13/main.py
 
+import argparse
+
 from core.shared_memory import SharedMemory
 
 from llm.local_llm_stub import LocalLLMStub
@@ -39,13 +41,13 @@ def summarize_design(state):
 
     # Sizing
     print("\n[3] Sizing Parameters")
-    sizing = state.get("sizing", {})
+    sizing = state.get("sizing") or {}
     for k, v in sizing.items():
         print(f"    {k}: {v}")
 
     # Constraint Report
     print("\n[4] Constraint Evaluation")
-    report = state.get("constraints_report", {})
+    report = state.get("constraints_report") or {}
     print("    Passed:", report.get("passed"))
     print("    Completeness Score:", report.get("completeness_score"))
 
@@ -61,13 +63,13 @@ def summarize_design(state):
 
     # Simulation Results
     print("\n[5] Simulation Results")
-    sim = state.get("simulation_results", {})
+    sim = state.get("simulation_results") or {}
     for k, v in sim.items():
         print(f"    {k}: {v}")
 
     # Refinement
     print("\n[6] Refinement Analysis")
-    refinement_issues = state.get("refinement_issues", [])
+    refinement_issues = state.get("refinement_issues") or []
     if refinement_issues:
         print("    Issues Identified:")
         for issue in refinement_issues:
@@ -77,7 +79,7 @@ def summarize_design(state):
 
     # History
     print("\n[7] Execution History")
-    history = state.get("history", [])
+    history = state.get("history") or []
     print("    Total Events:", len(history))
 
     print("\n    Last 5 Events:")
@@ -91,23 +93,49 @@ def summarize_design(state):
     print("\n" + "-" * 70 + "\n")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run the multi-agent analog design loop from terminal inputs."
+    )
+    parser.add_argument(
+        "--spec",
+        type=str,
+        default="Design a lowpass filter with 1kHz cutoff",
+        help="Natural-language design specification.",
+    )
+    parser.add_argument(
+        "--circuit-type",
+        type=str,
+        default="rc_lowpass",
+        help="Constraint circuit type (e.g., rc_lowpass, common_source).",
+    )
+    parser.add_argument(
+        "--target-fc",
+        type=float,
+        default=1000.0,
+        help="Target cutoff frequency in Hz.",
+    )
+    return parser.parse_args()
+
+
 # -------------------------------------------------------
 # Main Entry
 # -------------------------------------------------------
 
 def main():
+    args = parse_args()
 
     print_banner()
 
     # Initialize memory
     memory = SharedMemory()
 
-    # Example specification
-    memory.write("specification", "Design a lowpass filter with 1kHz cutoff")
+    # Specification and constraints passed from CLI.
+    memory.write("specification", args.spec)
 
     memory.write("constraints", {
-        "circuit_type": "rc_lowpass",
-        "target_fc_hz": 1000
+        "circuit_type": args.circuit_type,
+        "target_fc_hz": args.target_fc
     })
 
     # Initialize LLM
