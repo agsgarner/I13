@@ -1,0 +1,34 @@
+# Masala-CHAI Dataset Configuration
+# Circuit schematic caption → SPICE netlist generation task
+
+dataset_root: "../masala-chai-dataset-new"
+mapping_file: "data_mapping.json"
+
+# Define which fields to extract and how
+input_fields:
+  - name: "caption"
+    file_key: "caption"  # Read from file path specified in JSON
+  
+  - name: "spice"
+    file_key: "spice"    # Read from file path specified in JSON
+  
+  # Optional: you can add literal fields
+  # - name: "task_type"
+  #   literal: "circuit_generation"
+
+# Template for formatting each training example
+# Use {field_name} placeholders that match input_fields names
+template: |
+  ### Task
+  Generate a SPICE netlist from the schematic description.
+  
+  ### Description
+  {caption}
+  
+  ### SPICE
+  {spice}
+  <END_SAMPLE>
+
+# Output paths (relative to I13/ directory)
+output_corpus: "data/corpus_masala_baseline.txt"
+output_jsonl: "data/masala_pairs.jsonl"
