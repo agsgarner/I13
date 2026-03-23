@@ -1,7 +1,6 @@
 import subprocess
 import re
 
-
 def run_spice(file):
     result = subprocess.run(
         ["/opt/homebrew/bin/ngspice", "-b", file],
@@ -10,16 +9,34 @@ def run_spice(file):
     )
     return result.stdout
 
-# extract node voltages
 def extract_voltages(output):
-    matches = re.findall(r"\n\s*(\w+)\s+([+-]?\d*\.?\d+(?:e[+-]?\d+)?)", output)
-    return {name: float(val) for name, val in matches}
+    section = re.search(r"Node\s+Voltage.*?\n(.*?)\n\n", output, re.DOTALL)
 
-# extract MOS parameters
+    voltages = {}
+    if section:
+        lines = section.group(1).split("\n")
+        for line in lines:
+            parts = line.split()
+
+            if len(parts) != 2:
+                continue
+
+            name, val = parts
+
+            if "-" in val:
+                continue
+
+            try:
+                voltages[name] = float(val)
+            except ValueError:
+                continue
+
+    return voltages
+
 def extract_mos(output):
     def get(pattern):
-        m = re.search(pattern, output, re.IGNORECASE)
-        return float(m.group(1)) if m else None
+        match = re.search(pattern, output, re.IGNORECASE)
+        return float(match.group(1)) if match else None
 
     return {
         "Id": get(r"\bid\s+([+-]?\d*\.?\d+(?:e[+-]?\d+)?)"),
@@ -28,18 +45,30 @@ def extract_mos(output):
         "Vth": get(r"\bvon\s+([+-]?\d*\.?\d+(?:e[+-]?\d+)?)"),
     }
 
-# main test
 output = run_spice("mosfet_test.sp")
 
 voltages = extract_voltages(output)
 mos = extract_mos(output)
 
-print("Voltages:", voltages)
-print("MOS data:", mos)
+print("\nVoltages:")
+for name, value in voltages.items():
+    print(f"  {name}: {value:.4f} V")
 
+print("\nMOS Data:")
+if mos["Id"] is not None:
+    print(f"  Id: {mos['Id']:.6e} A")
+if mos["Vgs"] is not None:
+    print(f"  Vgs: {mos['Vgs']:.3f} V")
+if mos["Vds"] is not None:
+    print(f"  Vds: {mos['Vds']:.3f} V")
+if mos["Vth"] is not None:
+    print(f"  Vth: {mos['Vth']:.3f} V")
 
-if mos["Vds"] and mos["Vgs"] and mos["Vth"]:
+print("\nRegion Check:")
+if mos["Vds"] is not None and mos["Vgs"] is not None and mos["Vth"] is not None:
     if mos["Vds"] > (mos["Vgs"] - mos["Vth"]):
-        print("Saturation")
+        print("  Saturation")
     else:
-        print("Not in saturation")
+        print("  Not in saturation")
+else:
+    print("  Could not determine region")
