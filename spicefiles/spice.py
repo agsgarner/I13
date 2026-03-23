@@ -45,7 +45,8 @@ def extract_mos(output):
         "Vth": get(r"\bvon\s+([+-]?\d*\.?\d+(?:e[+-]?\d+)?)"),
     }
 
-output = run_spice("mosfet_test.sp")
+file = input("Enter SPICE file: ")
+output = run_spice(file)
 
 voltages = extract_voltages(output)
 mos = extract_mos(output)
