@@ -1,5 +1,6 @@
 import subprocess
 import re
+import json
 
 def run_spice(file):
     result = subprocess.run(
@@ -17,20 +18,15 @@ def extract_voltages(output):
         lines = section.group(1).split("\n")
         for line in lines:
             parts = line.split()
-
             if len(parts) != 2:
                 continue
-
             name, val = parts
-
             if "-" in val:
                 continue
-
             try:
                 voltages[name] = float(val)
-            except ValueError:
+            except:
                 continue
-
     return voltages
 
 def extract_mos(output):
@@ -45,7 +41,44 @@ def extract_mos(output):
         "Vth": get(r"\bvon\s+([+-]?\d*\.?\d+(?:e[+-]?\d+)?)"),
     }
 
-file = input("Enter SPICE file: ")
+def generate_circuit(filename="generated.sp"):
+    netlist = """* generated circuit
+Vdd vdd 0 1.8
+Vin in 0 DC 0.9
+M1 out in 0 0 NMOS L=180n W=1u
+R1 vdd out 10k
+.model NMOS NMOS (VTO=0.5 KP=100u)
+.op
+.print op v(out)
+.end
+"""
+    with open(filename, "w") as f:
+        f.write(netlist)
+
+    return filename, netlist
+
+def save_to_dataset(spec, netlist):
+    entry = {
+        "messages": [
+            {"role": "user", "content": spec},
+            {"role": "assistant", "content": netlist}
+        ]
+    }
+
+    with open("dataset.jsonl", "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+# ===== MAIN =====
+
+mode = input("Type 'generate' to auto-generate OR 'file' to choose a file: ").strip().lower()
+
+if mode == "file":
+    file = input("Enter SPICE file name (e.g., mosfet_test.sp): ").strip()
+    netlist = open(file).read()
+else:
+    spec = "Design circuit with Vout ≈ 1.2V"
+    file, netlist = generate_circuit()
+
 output = run_spice(file)
 
 voltages = extract_voltages(output)
@@ -65,11 +98,14 @@ if mos["Vds"] is not None:
 if mos["Vth"] is not None:
     print(f"  Vth: {mos['Vth']:.3f} V")
 
-print("\nRegion Check:")
-if mos["Vds"] is not None and mos["Vgs"] is not None and mos["Vth"] is not None:
+valid = False
+if mos["Vds"] and mos["Vgs"] and mos["Vth"]:
     if mos["Vds"] > (mos["Vgs"] - mos["Vth"]):
-        print("  Saturation")
-    else:
-        print("  Not in saturation")
-else:
-    print("  Could not determine region")
+        valid = True
+
+print("\nRegion Check:")
+print("  Saturation" if valid else "  Not in saturation")
+
+if valid:
+    save_to_dataset("Custom spec", netlist)
+    print("\nSaved to dataset.jsonl")
