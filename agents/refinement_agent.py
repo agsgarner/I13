@@ -20,8 +20,25 @@ class RefinementAgent(BaseAgent):
             memory.write("status", "refinement_skipped")
             return
 
-        fc_target = constraints["target_fc_hz"]
-        fc_sim = sim["fc_hz"]
+        if not sim or not constraints or not sizing:
+            memory.write("status", "refinement_skipped")
+            memory.write(
+                "refinement_report",
+                {"changed": False, "reason": "Missing simulation, constraints, or sizing"},
+            )
+            return
+
+        fc_target = constraints.get("target_fc_hz")
+        # Prefer SPICE if available later; for now use analytic cutoff
+        fc_sim = sim.get("fc_hz_spice") or sim.get("fc_hz_analytic")
+
+        if not fc_target or not fc_sim:
+            memory.write("status", "refinement_skipped")
+            memory.write(
+                "refinement_report",
+                {"changed": False, "reason": "Missing cutoff frequency data"},
+            )
+            return
 
         ratio = fc_sim / fc_target
 

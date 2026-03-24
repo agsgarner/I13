@@ -103,11 +103,11 @@ def main():
     memory = SharedMemory()
 
     # Example specification
-    memory.write("specification", "Design a lowpass filter with 1kHz cutoff")
+    memory.write("specification", "Design a lowpass filter with 200 Hz cutoff")
 
     memory.write("constraints", {
         "circuit_type": "rc_lowpass",
-        "target_fc_hz": 1000
+        "target_fc_hz": 200
     })
 
     # Initialize LLM

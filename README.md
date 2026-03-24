@@ -136,11 +136,63 @@ A structured design status enum tracks the current state of the pipeline:
 
 ---
 
-## Running the Project
+## Getting Started
 
+### 1. Clone and enter the repo
 
+```bash
+git clone https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
+cd YOUR_REPO_NAME
+```
+
+### 2. Python
+
+- **Python 3.9+** required.
+- Optional: create a virtual environment:
+  ```bash
+  python -m venv .venv
+  .venv\Scripts\activate   # Windows
+  # source .venv/bin/activate   # Linux/macOS
+  ```
+- Install dependencies (Streamlit for the web UI):
+  ```bash
+  pip install -r requirements.txt
+  ```
+
+### 3. ngspice (optional)
+
+The pipeline always writes an RC netlist and computes **fc** analytically. It **runs ngspice** when:
+
+- You set **`NGSPICE_CMD`** to a non-empty path/command, or
+- **Windows only:** `NGSPICE_CMD` is unset and `ngspice_con.exe` exists at the default path used in `simulation_agent.py` (edit that constant if your install differs).
+
+- **Without ngspice** (no env var and no default exe): simulation completes with `fc_hz_analytic`; `spice_skipped: true` (no external simulator).
+- **With `NGSPICE_CMD`**: install ngspice locally, then point the variable at the executable:
+  - **Linux**: e.g. `sudo apt install ngspice`, then `export NGSPICE_CMD=ngspice`
+  - **macOS**: e.g. `brew install ngspice`, then `export NGSPICE_CMD=ngspice`
+  - **Windows**: use the **console** binary `ngspice_con.exe`, e.g.:
+    ```powershell
+    $env:NGSPICE_CMD = "C:\path\to\ngspice_con.exe"
+    ```
+    or add its folder to PATH and use `$env:NGSPICE_CMD = "ngspice_con"`.
+
+Download: [ngspice](https://ngspice.sourceforge.io/download.html).
+
+### 4. Run
+
+**Command line:**
+
+```bash
 python main.py
+```
 
+**Web UI (Streamlit):**
+
+```bash
+streamlit run app.py
+```
+
+Then open the URL shown (e.g. http://localhost:8501), enter a spec and target cutoff, and click **Run design**.
 
 ---
 
