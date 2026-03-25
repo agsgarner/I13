@@ -1,5 +1,8 @@
-# llm_interface.py
+# I13/core/llm_interface.py
+
+from typing import Any
+
 
 class LLMInterface:
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str) -> Any:
         raise NotImplementedError
