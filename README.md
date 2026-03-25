@@ -70,6 +70,7 @@ Specification
 → TopologyAgent  
 → SizingAgent  
 → ConstraintAgent  
+→ NetlistAgent
 → SimulationAgent  
 → RefinementAgent  
 → OrchestrationAgent  
@@ -175,7 +176,6 @@ The dataset is omitted to:
 ## Future Extensions
 
 - Additional filter topologies
-- SPICE integration
 - Optimization loops
 - Multi-stage filter synthesis
 - Expanded constraint reasoning
@@ -183,8 +183,6 @@ The dataset is omitted to:
 ---
 
 ## Citation
-
-If you use the Masala-CHAI dataset in your work, please cite:
 
 Bhandari, J., Bhat, V., He, Y., Rahmani, H., Garg, S., & Karri, R. (2025).
 Masala-CHAI: A Large-Scale SPICE Netlist Dataset for Analog Circuits by Harnessing AI.
