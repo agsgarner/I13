@@ -4,7 +4,7 @@ import argparse
 
 from core.shared_memory import SharedMemory
 
-from llm.local_llm_stub import LocalLLMStub
+from llm.qwen_llm import QwenLLM
 
 from agents.topology_agent import TopologyAgent
 from agents.sizing_agent import SizingAgent
@@ -115,6 +115,24 @@ def parse_args():
         default=1000.0,
         help="Target cutoff frequency in Hz.",
     )
+    parser.add_argument(
+        "--llm-model",
+        type=str,
+        default="Qwen/Qwen2.5-1.5B-Instruct",
+        help="Pretrained Qwen model id to use for topology selection.",
+    )
+    parser.add_argument(
+        "--llm-max-new-tokens",
+        type=int,
+        default=96,
+        help="Maximum generated tokens for each LLM call.",
+    )
+    parser.add_argument(
+        "--llm-temperature",
+        type=float,
+        default=0.2,
+        help="Sampling temperature for Qwen generation.",
+    )
     return parser.parse_args()
 
 
@@ -139,7 +157,11 @@ def main():
     })
 
     # Initialize LLM
-    llm = LocalLLMStub()
+    llm = QwenLLM(
+        model_name=args.llm_model,
+        max_new_tokens=args.llm_max_new_tokens,
+        temperature=args.llm_temperature,
+    )
 
     # Initialize agents
     topology_agent = TopologyAgent(llm)

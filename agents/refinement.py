@@ -108,11 +108,23 @@ class RefinementAgent:
             state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
-        # Want fc_sim -> target_fc.
-        # fc ∝ 1/(RC). If fc_sim is too high, increase R or C. If too low, decrease R or C.
-        desired_RC_scale = ratio  # because fc_new = fc_old / scale; need scale = fc_old/target = ratio
+        desired_RC_scale = ratio  
         desired_RC_scale = self._clamp_abs(desired_RC_scale)
         step = self._clamp_step(desired_RC_scale)
+
+        change_magnitude = abs(step - 1.0)
+        if change_magnitude < 0.001:  
+            report = RefinementReport(
+                changed=False,
+                changes={},
+                notes=[
+                    f"No significant change needed. fc_sim={fc_sim:.3g} Hz ≈ target={target_fc:.3g} Hz (step factor: {step:.10f})"
+                ],
+                next_action="stop",
+            )
+            state["refinement_report"] = report.__dict__
+            state["status"] = DesignStatus.REFINEMENT_NO_CHANGE
+            return state, report
 
         new_R = R * step
 

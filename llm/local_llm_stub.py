@@ -6,7 +6,7 @@ from core.llm_interface import LLMInterface
 class LocalLLMStub(LLMInterface):
     """
     Temporary mock LLM.
-    This simulates topology selection until real transformer is integrated.
+    This simulates topology selection for offline testing when Qwen is unavailable.
     """
 
     def generate(self, prompt: str):
