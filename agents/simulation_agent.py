@@ -7,8 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from datetime import datetime
-
-import matplotlib.pyplot as plt
+from core.analog_defaults import ANALOG_DEFAULTS
 
 from agents.base_agent import BaseAgent
 from core.shared_memory import SharedMemory
@@ -23,6 +22,7 @@ class SimulationAgent(BaseAgent):
         netlist = memory.read("netlist")
         topology = memory.read("selected_topology")
         sizing = memory.read("sizing") or {}
+        constraints = self._merged_constraints(memory)
 
         if not netlist:
             memory.write("status", "simulation_failed")
@@ -34,7 +34,7 @@ class SimulationAgent(BaseAgent):
             memory.write("simulation_error", "ngspice not found")
             return None
 
-        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = self._build_run_id(memory, topology)
         base_dir = os.path.join("artifacts", "simulations", run_id)
         os.makedirs(base_dir, exist_ok=True)
 
@@ -94,8 +94,15 @@ class SimulationAgent(BaseAgent):
                 if ac_data["x"] and ac_data["y"]:
                     sim["ac_points"] = len(ac_data["x"])
                     ac_plot = os.path.join(base_dir, "ac_plot.png")
-                    self._plot_ac(ac_data, ac_plot)
+                    input_ac_mag = float(constraints.get("vin_ac", 1.0))
+                    self._plot_ac(ac_data, ac_plot, input_ac_mag=input_ac_mag)
                     sim["ac_plot"] = ac_plot
+                    gain_db, bw_hz = self._extract_gain_bw_from_ac(ac_data, input_ac_mag=input_ac_mag)
+                    
+                    if gain_db is not None: 
+                        sim["gain_db"] = gain_db 
+                    if bw_hz is not None: 
+                        sim["bandwidth_hz"] = bw_hz
 
                     if topology == "rc_lowpass":
                         sim["fc_hz_from_ac"] = self._estimate_cutoff_from_ac(ac_data)
@@ -132,6 +139,21 @@ class SimulationAgent(BaseAgent):
                 self._plot_tran(tran_in_data, tran_out_data, tran_plot)
                 sim["tran_plot"] = tran_plot
                 sim["tran_points"] = len(tran_out_data["x"])
+            
+            if os.path.exists(log_path):
+                saved_log = os.path.join(base_dir, "ngspice.log")
+                shutil.copy2(log_path, saved_log)
+                sim["log_path"] = saved_log
+                sim["log_preview"] = self._preview_file(saved_log, max_lines=20)
+
+                if topology == "current_mirror":
+                    sim_i = self._extract_current_from_log(sim.get("log_preview"))
+                    if sim_i is not None:
+                        sim["iout_a"] = abs(sim_i)
+
+                if topology in ("common_source_res_load", "diff_pair", "two_stage_miller"):
+                    sim["op_summary"] = self._extract_op_region_summary(sim.get("log_preview"))
+                    
 
             # -------------------------
             # RC cutoff logic
@@ -161,7 +183,13 @@ class SimulationAgent(BaseAgent):
                             sim["fc_hz"] = fc_ac
                 else:
                     sim["fc_hz"] = fc_ac
-
+            
+            if topology == "common_source_res_load":
+                vdd = memory.read("constraints").get("supply_v")
+                ibias = sizing.get("I_bias")
+                if vdd is not None and ibias is not None:
+                    sim["power_mw"] = 1000.0 * float(vdd) * float(ibias)
+                    
             memory.write("simulation_results", sim)
             memory.write("status", "simulation_complete")
             return sim
@@ -176,6 +204,24 @@ class SimulationAgent(BaseAgent):
             if path and os.path.exists(path):
                 return path
         return None
+
+    def _build_run_id(self, memory: SharedMemory, topology: str):
+        attempt = int(memory.read("iteration", 0)) + 1
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        topology_slug = (topology or "unknown").replace(" ", "_")
+        return f"{timestamp}_{topology_slug}_attempt_{attempt:02d}"
+
+    def _get_pyplot(self):
+        mpl_dir = os.path.join(tempfile.gettempdir(), "i13-mplconfig")
+        os.makedirs(mpl_dir, exist_ok=True)
+        os.environ.setdefault("MPLCONFIGDIR", mpl_dir)
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        return plt
 
     def _safe_write_text(self, path, text):
         with open(path, "w") as f:
@@ -281,22 +327,24 @@ class SimulationAgent(BaseAgent):
 
         return 1.0 / (2.0 * math.pi * r * c)
 
-    def _plot_ac(self, data, out_path):
+    def _plot_ac(self, data, out_path, input_ac_mag=1.0):
         """
-        Input y-values are linear magnitudes, not dB.
-        Convert to dB for plotting.
+        Input y-values are output magnitudes.
+        Plot gain magnitude in dB so amplifier responses are not shown in dBV.
         """
         if not data["x"] or not data["y"]:
             return
 
-        mags = [max(abs(v), 1e-20) for v in data["y"]]
+        plt = self._get_pyplot()
+        input_ac_mag = max(float(input_ac_mag), 1e-20)
+        mags = [max(abs(v) / input_ac_mag, 1e-20) for v in data["y"]]
         mags_db = [20.0 * math.log10(v) for v in mags]
 
         plt.figure(figsize=(8, 5))
         plt.semilogx(data["x"], mags_db)
         plt.xlabel("Frequency (Hz)")
-        plt.ylabel("Magnitude (dB)")
-        plt.title("AC Response |V(out)|")
+        plt.ylabel("Gain (dB)")
+        plt.title("AC Response |V(out)/V(in)|")
         plt.grid(True, which="both")
         plt.tight_layout()
         plt.savefig(out_path, dpi=160)
@@ -306,6 +354,7 @@ class SimulationAgent(BaseAgent):
         if not tran_out_data or not tran_out_data["x"] or not tran_out_data["y"]:
             return
 
+        plt = self._get_pyplot()
         plt.figure(figsize=(8, 5))
 
         if tran_in_data and tran_in_data["x"] and tran_in_data["y"]:
@@ -355,3 +404,60 @@ class SimulationAgent(BaseAgent):
 
         idx = min(range(len(mags)), key=lambda i: abs(mags[i] - target))
         return xs[idx]
+
+    def _extract_gain_bw_from_ac(self, data, input_ac_mag=1.0):
+        xs = data.get("x", [])
+        ys = data.get("y", [])
+        if len(xs) < 3 or len(ys) < 3:
+            return None, None
+
+        input_ac_mag = max(float(input_ac_mag), 1e-20)
+
+        gains = [max(abs(v) / input_ac_mag, 1e-20) for v in ys]
+        gain0 = gains[0]
+        gain0_db = 20.0 * math.log10(gain0)
+
+        target = gain0 / math.sqrt(2.0)
+        bw = None
+        for i in range(1, len(gains)):
+            if gains[i - 1] >= target and gains[i] <= target:
+                bw = xs[i]
+                break
+
+        return gain0_db, bw
+    
+    def _extract_current_from_log(self, preview_lines):
+        for line in preview_lines or []:
+            nums = self._extract_numeric_tokens(line)
+            if nums:
+                return nums[-1]
+        return None
+
+    def _extract_op_region_summary(self, log_preview):
+        if not log_preview:
+            return []
+
+        summary = []
+        for line in log_preview:
+            s = line.strip()
+            if not s:
+                continue
+            if (
+                "Node" in s
+                or "Voltage" in s
+                or "Current" in s
+                or "@m1" in s
+                or "v(out)" in s
+                or "v(in)" in s
+                or "Index" in s
+            ):
+                summary.append(s)
+
+        return summary[:12]
+    
+    def _merged_constraints(self, memory):
+        merged = {}
+        merged.update(ANALOG_DEFAULTS.get("process", {}))
+        merged.update(ANALOG_DEFAULTS.get("simulation", {}))
+        merged.update(memory.read("constraints") or {})
+        return merged

@@ -1,5 +1,7 @@
 # I13/core/environment.py
 
+from core.context import Context
+
 class Environment:
 
     def __init__(self):
@@ -15,3 +17,4 @@ class Environment:
         self.constraints = {}
     
         self.context = Context()
+        

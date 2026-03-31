@@ -1,4 +1,4 @@
-# I13/agents/constraint_agent.py
+# I13/agents/constraints_agent.py
 
 from dataclasses import dataclass, field
 from typing import List
@@ -23,25 +23,36 @@ class ConstraintAgent(BaseAgent):
     REQUIRED_CONSTRAINT_KEYS_BY_TEMPLATE = {
         "filter_rc": ["target_fc_hz"],
         "amplifier_single_stage": ["supply_v", "target_gain_db", "target_bw_hz", "power_limit_mw"],
+        "amplifier_differential": ["supply_v", "power_limit_mw"],
+        "amplifier_differential_bjt": ["tail_current_a", "collector_res_ohm"],
         "opamp_two_stage": [
             "supply_v", "target_gain_db", "target_ugbw_hz",
             "phase_margin_deg", "load_cap_f", "power_limit_mw"
         ],
-        "bias_current_mirror": ["supply_v", "target_iout_a", "accuracy_pct", "compliance_v"]
+        "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"],
+        "transconductor": ["target_gm_s"],
+        "comparator": ["supply_v"]
     }
 
     REQUIRED_SIZING_KEYS_BY_TOPOLOGY = {
         "rc_lowpass": ["R_ohm", "C_f"],
         "common_source_res_load": ["W_m", "L_m", "R_D", "I_bias"],
         "diff_pair": ["W_in", "L_in", "W_tail", "L_tail", "I_tail", "R_load"],
-        "current_mirror": ["W_ref", "L_ref", "W_out", "L_out", "I_ref"]
+        "bjt_diff_pair": ["I_tail", "Ic_each", "R_C", "gm_each"],
+        "current_mirror": ["W_ref", "L_ref", "W_out", "L_out", "I_ref"],
+        "two_stage_miller": ["Cc_f", "gm1_target_s", "I_stage1_a", "I_stage2_a"],
+        "gm_stage": ["gm_target_s", "I_bias_a", "W_m", "L_m"]
     }
 
     POSITIVE_CONSTRAINTS_BY_TEMPLATE = {
         "filter_rc": ["target_fc_hz"],
         "amplifier_single_stage": ["supply_v", "target_bw_hz", "power_limit_mw"],
+        "amplifier_differential": ["supply_v", "power_limit_mw"],
+        "amplifier_differential_bjt": ["tail_current_a", "collector_res_ohm"],
         "opamp_two_stage": ["supply_v", "target_ugbw_hz", "power_limit_mw"],
-        "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"]
+        "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"],
+        "transconductor": ["target_gm_s"],
+        "comparator": ["supply_v"]
     }
 
     def run_agent(self, memory: SharedMemory):
@@ -90,7 +101,6 @@ class ConstraintAgent(BaseAgent):
             if val is not None and val <= 0:
                 issues.append(f"Constraint '{key}' must be > 0")
 
-        # topology-specific sanity checks
         if topology_key == "rc_lowpass":
             R = sizing.get("R_ohm")
             C = sizing.get("C_f")
@@ -106,28 +116,63 @@ class ConstraintAgent(BaseAgent):
                     warnings.append("Initial RC sizing is more than 30% away from target_fc_hz")
 
         elif topology_key == "common_source_res_load":
-            if sizing.get("W_m", 0) <= 0:
-                issues.append("W_m must be > 0")
-            if sizing.get("L_m", 0) <= 0:
-                issues.append("L_m must be > 0")
-            if sizing.get("R_D", 0) <= 0:
-                issues.append("R_D must be > 0")
-            if sizing.get("I_bias", 0) <= 0:
-                issues.append("I_bias must be > 0")
+            VDD = constraints.get("supply_v")
+            I = sizing.get("I_bias")
+            RD = sizing.get("R_D")
+            Vov = sizing.get("Vov_target", constraints.get("target_vov_v", 0.2))
 
-            gain_db = constraints.get("target_gain_db")
-            if gain_db is not None and gain_db > 45:
-                warnings.append("Requested gain may be high for a single-stage common-source with resistive load")
+            if VDD and I and RD:
+                vdrop = I * RD
+                vout_est = VDD - vdrop
+
+                if vdrop > 0.8 * VDD:
+                    warnings.append(
+                        f"Drain resistor drop consumes most of VDD; "
+                        f"vdrop={vdrop:.3f} V, VDD={VDD:.3f} V."
+                    )
+
+                if vout_est < Vov:
+                    issues.append(
+                        f"Estimated Vout too low to keep transistor in saturation: "
+                        f"Vout_est={vout_est:.3f} V, Vov={Vov:.3f} V."
+                    )
 
         elif topology_key == "diff_pair":
-            for key in ["W_in", "L_in", "W_tail", "L_tail", "I_tail", "R_load"]:
-                if sizing.get(key, 0) <= 0:
-                    issues.append(f"{key} must be > 0")
+            I_tail = sizing.get("I_tail")
+            R_load = sizing.get("R_load")
+            if I_tail and R_load:
+                vdrop = (I_tail / 2.0) * R_load
+                supply_v = constraints.get("supply_v")
+                if supply_v and vdrop > 0.5 * supply_v:
+                    warnings.append("Load resistor drop may limit differential output swing.")
+
+            vid_max = constraints.get("max_input_diff_v")
+            if vid_max is not None and vid_max > 0.2:
+                warnings.append("Large differential input may push pair out of small-signal region.")
+
+        elif topology_key == "bjt_diff_pair":
+            gm = sizing.get("gm_each")
+            if gm is not None and gm < 1e-4:
+                warnings.append("BJT differential pair gm is low; gain may be limited.")
 
         elif topology_key == "current_mirror":
-            for key in ["W_ref", "L_ref", "W_out", "L_out", "I_ref"]:
-                if sizing.get(key, 0) <= 0:
-                    issues.append(f"{key} must be > 0")
+            compliance_v = constraints.get("compliance_v")
+            vov = sizing.get("Vov_target", 0.2)
+            if compliance_v is not None and compliance_v < vov:
+                issues.append("Compliance voltage too low for desired mirror overdrive.")
+
+            ratio = sizing.get("mirror_ratio", 1.0)
+            if ratio > 20:
+                warnings.append("Large mirror ratio may be sensitive to mismatch.")
+
+        elif topology_key == "two_stage_miller":
+            cc = sizing.get("Cc_f")
+            cl = constraints.get("load_cap_f")
+            pm = constraints.get("phase_margin_deg")
+            if cc and cl and cc < 0.1 * cl:
+                warnings.append("Compensation capacitor may be too small relative to load capacitance.")
+            if pm is not None and pm < 50:
+                warnings.append("Requested phase margin is low for a stable design.")
 
         passed = len(issues) == 0
 
@@ -144,4 +189,3 @@ class ConstraintAgent(BaseAgent):
         memory.write("constraints_report", report.__dict__)
         memory.write("status", "constraints_ok" if passed else "constraints_failed")
         return state, report
-    

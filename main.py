@@ -3,8 +3,6 @@
 import os
 
 from core.shared_memory import SharedMemory
-
-from llm.openai_llm import OpenAILLM
 from llm.local_llm_stub import LocalLLMStub
 
 from agents.topology_agent import TopologyAgent
@@ -17,14 +15,12 @@ from agents.orchestration_agent import OrchestrationAgent
 
 
 def build_llm():
-    """
-    Prefer OpenAI if available, but fall back to the local stub so the demo
-    still runs reliably even without API/network access.
-    """
     use_openai = os.getenv("USE_OPENAI", "0").strip() == "1"
 
     if use_openai:
         try:
+            from llm.openai_llm import OpenAILLM
+
             llm = OpenAILLM(model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"))
             print("[LLM] Using OpenAI backend.")
             return llm
@@ -35,120 +31,130 @@ def build_llm():
     return LocalLLMStub()
 
 
-def print_banner():
-    print("\n" + "=" * 72)
-    print("        MULTI-AGENT ANALOG CIRCUIT DESIGN SYSTEM")
-    print("=" * 72 + "\n")
+def get_demo_case(case_name: str):
+    cases = {
+        "rc": {
+            "specification": "Design a first-order low-pass filter with approximately 1 kHz cutoff.",
+            "constraints": {
+                "target_fc_hz": 1000.0,
+                "fixed_cap_f": 10e-9,
+                "vin_ac": 1.0,
+                "vin_step": 1.0,
+            },
+        },
+        "cs_amp": {
+            "specification": "Design a single-stage common-source amplifier for moderate gain.",
+            "constraints": {
+                "supply_v": 1.8,
+                "target_gain_db": 20.0,
+                "target_bw_hz": 1e6,
+                "power_limit_mw": 2.0,
+                "vin_dc": 0.75,
+                "vin_ac": 1e-3,
+                "load_cap_f": 1e-12,
+                "target_vov_v": 0.2,
+            },
+        },
+        "mirror": {
+            "specification": "Design a MOS current mirror to generate 100 uA output current.",
+            "constraints": {
+                "supply_v": 1.8,
+                "target_iout_a": 100e-6,
+                "mirror_ratio": 1.0,
+                "compliance_v": 0.8,
+                "target_vov_v": 0.2,
+            },
+        },
+        "opamp": {
+            "specification": "Design a two-stage op amp with 60 dB gain and 10 MHz UGBW.",
+            "constraints": {
+                "supply_v": 1.8,
+                "target_gain_db": 60.0,
+                "target_ugbw_hz": 10e6,
+                "phase_margin_deg": 60.0,
+                "load_cap_f": 1e-12,
+                "power_limit_mw": 2.0,
+                "target_slew_v_per_us": 5.0,
+            },
+        },
+    }
+    return cases[case_name]
 
 
-def summarize_design(state):
-    print("\n" + "-" * 72)
-    print("FINAL DESIGN SUMMARY")
-    print("-" * 72)
+def _fmt_value(value, unit=""):
+    if value is None:
+        return "n/a"
+    if isinstance(value, float):
+        return f"{value:.6g}{unit}"
+    return f"{value}{unit}"
 
-    print("\n[1] Specification")
-    print("   ", state.get("specification"))
 
-    print("\n[2] Topology")
-    print("   selected_topology:", state.get("selected_topology"))
-    print("   topology_confidence:", state.get("topology_confidence"))
-    print("   topology_reasoning:", state.get("topology_reasoning"))
+def format_final_report(case_name: str, final_state: dict) -> str:
+    sim = final_state.get("simulation_results") or {}
+    refinement = final_state.get("refinement_report") or {}
+    constraints_report = final_state.get("constraints_report") or {}
 
-    print("\n[3] Constraints")
-    for k, v in (state.get("constraints") or {}).items():
-        print(f"   {k}: {v}")
-
-    print("\n[4] Sizing")
-    for k, v in (state.get("sizing") or {}).items():
-        print(f"   {k}: {v}")
-
-    print("\n[5] Constraint Report")
-    report = state.get("constraints_report") or {}
-    print("   passed:", report.get("passed"))
-    for issue in report.get("issues", []):
-        print("   issue:", issue)
-    for warning in report.get("warnings", []):
-        print("   warning:", warning)
-
-    print("\n[6] Netlist")
-    print("   source:", state.get("netlist_source"))
-    netlist = state.get("netlist")
-    if netlist:
-        print(netlist)
-
-    print("\n[7] Simulation Results")
-    sim = state.get("simulation_results") or {}
-    ordered_keys = [
-        "returncode",
-        "saved_netlist_path",
-        "artifact_dir",
-        "ac_csv",
-        "ac_plot",
-        "ac_points",
-        "tran_in_csv",
-        "tran_out_csv",
-        "tran_plot",
-        "tran_points",
-        "fc_hz_from_ac",
-        "fc_hz_formula",
-        "fc_hz",
-        "parser_warning",
-        "ngspice_path",
+    lines = [
+        "",
+        "=== Final Report ===",
+        f"Case: {case_name}",
+        f"Status: {final_state.get('status')}",
+        f"Topology: {final_state.get('selected_topology')}",
+        f"Iterations completed: {final_state.get('iteration', 0)}",
+        f"Netlist source: {final_state.get('netlist_source', 'n/a')}",
     ]
-    shown = set()
-    for k in ordered_keys:
-        if k in sim:
-            print(f"   {k}: {sim[k]}")
-            shown.add(k)
 
-    for k, v in sim.items():
-        if k not in shown and k not in ("stdout", "stderr", "ac_preview", "tran_preview"):
-            print(f"   {k}: {v}")
+    artifact_dir = sim.get("artifact_dir")
+    if artifact_dir:
+        lines.append(f"Latest artifact dir: {artifact_dir}")
 
-    if sim.get("ac_preview"):
-        print("   ac_preview:")
-        for line in sim["ac_preview"]:
-            print("      ", line)
+    metrics = []
+    if sim.get("gain_db") is not None:
+        metrics.append(f"Gain: {_fmt_value(sim.get('gain_db'), ' dB')}")
+    if sim.get("bandwidth_hz") is not None:
+        metrics.append(f"Bandwidth: {_fmt_value(sim.get('bandwidth_hz'), ' Hz')}")
+    if sim.get("fc_hz") is not None:
+        metrics.append(f"Cutoff: {_fmt_value(sim.get('fc_hz'), ' Hz')}")
+    if sim.get("power_mw") is not None:
+        metrics.append(f"Power: {_fmt_value(sim.get('power_mw'), ' mW')}")
+    if sim.get("iout_a") is not None:
+        metrics.append(f"Iout: {_fmt_value(sim.get('iout_a'), ' A')}")
+    if metrics:
+        lines.append("Metrics: " + ", ".join(metrics))
 
-    if sim.get("tran_preview"):
-        print("   tran_preview:")
-        for line in sim["tran_preview"]:
-            print("      ", line)
+    if constraints_report.get("warnings"):
+        lines.append("Constraint warnings:")
+        lines.extend(f"  - {warning}" for warning in constraints_report["warnings"])
 
-    print("\n[8] Refinement Report")
-    refinement = state.get("refinement_report") or {}
-    print("   changed:", refinement.get("changed"))
-    for note in refinement.get("notes", []):
-        print("   note:", note)
+    if refinement.get("notes"):
+        lines.append("Refinement notes:")
+        lines.extend(f"  - {note}" for note in refinement["notes"])
 
-    print("\n[9] Final Status")
-    print("   ", state.get("status"))
+    error_fields = [
+        ("Topology error", final_state.get("topology_error")),
+        ("Sizing error", final_state.get("sizing_error")),
+        ("Constraint issues", constraints_report.get("issues")),
+        ("Netlist error", final_state.get("netlist_error")),
+        ("Simulation error", final_state.get("simulation_error")),
+        ("Parser warning", sim.get("parser_warning")),
+    ]
+    for label, value in error_fields:
+        if value:
+            if isinstance(value, list):
+                lines.append(f"{label}: " + "; ".join(str(item) for item in value))
+            else:
+                lines.append(f"{label}: {value}")
 
-    print("\n[10] Iteration Count")
-    print("   ", state.get("iteration"))
-
-    print("\n" + "-" * 72 + "\n")
+    return "\n".join(lines)
 
 
 def main():
-    print_banner()
+    case_name = os.getenv("DESIGN_CASE", "cs_amp")
+    case = get_demo_case(case_name)
 
     memory = SharedMemory()
-
-    memory.write(
-        "specification",
-        "Design a first-order low-pass filter with approximately 1 kHz cutoff."
-    )
-
-    memory.write(
-        "constraints",
-        {
-            "target_fc_hz": 1000.0,
-            "fixed_cap_f": 10e-9,
-            "vin_ac": 1.0,
-            "vin_step": 1.0,
-        }
-    )
+    memory.write("specification", case["specification"])
+    memory.write("constraints", case["constraints"])
 
     llm = build_llm()
 
@@ -167,15 +173,14 @@ def main():
         netlist_agent=netlist_agent,
         simulation_agent=simulation_agent,
         refinement_agent=refinement_agent,
-        max_iterations=3,
+        max_iterations=7,
     )
 
-    print("Starting autonomous design workflow...\n")
+    print(f"Running case: {case_name}")
     final_state = orchestrator.run()
-    print("Workflow complete.\n")
-
-    summarize_design(final_state)
+    print(format_final_report(case_name, final_state))
 
 
 if __name__ == "__main__":
     main()
+    

@@ -49,6 +49,9 @@ class RefinementAgent(BaseAgent):
             state, report = self._refine_rc_lowpass(state, constraints, sizing, sim)
         elif topo == "common_source_res_load":
             state, report = self._refine_common_source(state, constraints, sizing, sim)
+        elif topo == "current_mirror":
+            state, report = self._refine_current_mirror(state, constraints, sizing, sim)
+
         else:
             report = RefinementReport(
                 changed=False,
@@ -257,4 +260,35 @@ class RefinementAgent(BaseAgent):
         )
         state["refinement_report"] = report.__dict__
         state["status"] = "refined" if changed else "refinement_no_change"
+        return state, report
+
+    def _refine_current_mirror(self, state, constraints, sizing, sim):
+        target_i = constraints.get("target_iout_a")
+        sim_i = sim.get("iout_a")
+        if target_i is None or sim_i is None or sim_i <= 0:
+            report = RefinementReport(False, {}, ["Missing mirror current results"], "stop")
+            state["refinement_report"] = report.__dict__
+            state["status"] = "refinement_failed"
+            return state, report
+
+        err = abs(sim_i - target_i) / target_i
+        if err < 0.05:
+            report = RefinementReport(False, {}, ["Mirror current already within 5%"], "stop")
+            state["refinement_report"] = report.__dict__
+            state["status"] = "refinement_no_change"
+            return state, report
+
+        factor = self._clamp_step(target_i / sim_i)
+        old = float(sizing["W_out"])
+        new = old * factor
+        state["sizing"]["W_out"] = new
+
+        report = RefinementReport(
+            True,
+            {"W_out": {"old": old, "new": new, "factor": factor}},
+            [f"Adjusted W_out to move output current from {sim_i:.3g} A toward {target_i:.3g} A."],
+            "rerun_constraints_and_spice",
+        )
+        state["refinement_report"] = report.__dict__
+        state["status"] = "refined"
         return state, report
