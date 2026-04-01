@@ -2,209 +2,117 @@
 
 ## Overview
 
-This repository contains a modular, multi-agent framework for analog filter design.
+This repository is a multi-agent analog design demo flow. It takes a circuit goal, selects a topology, sizes a first-pass implementation, validates constraints, generates an ngspice netlist, runs simulation, and stores artifacts for presentation.
 
-The system demonstrates how structured AI agents can collaborate through shared memory to:
+The framework is designed for capstone-style demos where we want traceability and repeatable outputs more than full custom-IC signoff accuracy.
 
-- Interpret design specifications
-- Select circuit topologies
-- Size components
-- Validate constraints
-- Perform lightweight simulation
-- Log design state transitions
+## Flow
 
-The focus of this project is architectural structure, orchestration, and traceability
+`Specification -> TopologyAgent -> SizingAgent -> ConstraintAgent -> NetlistAgent -> SimulationAgent -> RefinementAgent`
 
----
-
-## System Architecture
-
-The framework follows a shared-memory multi-agent pattern:
-
-
-Specification -> TopologyAgent -> SizingAgent -> ConstraintAgent -> NetlistAgent -> SimulationAgent -> RefinementAgent
-
-
-Each agent:
-- Reads from shared memory
-- Writes structured outputs
-- Logs state transitions
-
-The OrchestrationAgent coordinates execution and validation flow.
-
----
+Each agent reads and writes shared memory so the full design state stays inspectable.
 
 ## Repository Structure
 
-- `agents/` — Independent design agents and workflow control
-- `memory/` — Shared state and history logging
-- `core/` — Structured design state and memory between agents
-- `main.py` — Entry point and design summary output
+- `agents/` - design agents and orchestration logic
+- `core/` - shared defaults, memory helpers, topology library, demo case catalog
+- `flow/` - lightweight workflow engine
+- `flow/design_flow.py` - orchestration graph, retry logic, and refinement loop transitions
+- `llm/` - OpenAI-backed and local stub LLM adapters
+- `main.py` - run one demo case
+- `demo_runner.py` - run a batch of demo cases
 
----
+## Running
 
-# LLM Customized for Analog Circuit Design
+Run the default case:
 
-## Overview
+```bash
+python3 main.py
+```
 
-This repository contains a modular, multi-agent framework for analog filter design.
+List available demo cases:
 
-The system demonstrates how structured AI agents can collaborate through shared memory to:
+```bash
+DESIGN_CASE=list python3 main.py
+```
 
-- Interpret design specifications  
-- Select circuit topologies  
-- Size components  
-- Validate constraints  
-- Perform lightweight simulation  
-- Log design state transitions  
+Run a specific case:
 
-The focus of this project is architectural structure, orchestration, and traceability within an AI-assisted analog design workflow.
+```bash
+DESIGN_CASE=mirror python3 main.py
+DESIGN_CASE=opamp python3 main.py
+DESIGN_CASE=diff_pair python3 main.py
+SHOW_HISTORY=1 DESIGN_CASE=mirror python3 main.py
+```
 
----
+Run a batch demo:
 
-## System Architecture
+```bash
+DEMO_LIMIT=4 python3 demo_runner.py
+DESIGN_CASES=mirror,opamp,common_source,diff_pair python3 demo_runner.py
+```
 
-The framework follows a shared-memory multi-agent pattern:
+## OpenAI Fallback
 
-Specification  
-→ TopologyAgent  
-→ SizingAgent  
-→ ConstraintAgent  
-→ NetlistAgent
-→ SimulationAgent  
-→ RefinementAgent  
-→ OrchestrationAgent  
+By default the project uses `LocalLLMStub`. To enable OpenAI-backed fallback:
 
-Each agent:
-- Reads from shared memory  
-- Writes structured outputs  
-- Logs state transitions  
+```bash
+export USE_OPENAI=1
+export OPENAI_API_KEY=...
+export OPENAI_MODEL=gpt-4.1-mini
+python3 main.py
+```
 
-The OrchestrationAgent coordinates execution and validation flow.
+## Demo Circuit Catalog
 
----
+The catalog includes:
 
-## Repository Structure
+- `common_source`
+- `two_stage_common_source_res_load`
+- `common_drain`
+- `common_gate`
+- `rc`
+- `source_degenerated_amplifier`
+- `mirror`
+- `common_source_active_load`
+- `cascode_amp`
+- `diff_pair`
+- `diode_connected_amplifier`
+- `mos_buffer`
+- `nand2`
+- `opamp`
+- `sram6t`
+- `two_stage_opamp_single_ended`
+- `fully_diff_amp_cmfb`
+- `lc_oscillator`
+- `telescopic_cascode_opamp`
+- `bandgap_reference`
 
-- `agents/` — Independent design agents and workflow control  
-- `memory/` — Shared state and history logging  
-- `core/` — Structured design state and memory between agents  
-- `main.py` — Entry point and design summary output  
+Notes:
 
----
+- Strongest native template support today is for `rc`, `mirror`, `common_source`, `diff_pair`, `opamp`, and the `gm_stage` behavioral proxy family.
+- Some advanced catalog entries intentionally map to demo proxy models so the framework can still run end-to-end and generate plots in a live presentation.
 
-## Example Use Case
+## Simulation Artifacts
 
-Input:
+Each run writes under `artifacts/simulations/...` and may include:
 
-> Design a lowpass filter with 1kHz cutoff
+- `generated.sp`
+- `ngspice.log`
+- `ac_out.csv`, `tran_out.csv`, `dc_out.csv`
+- `ac_plot.svg`, `tran_plot.svg`, `dc_plot.svg`
 
-Output:
+The plotting layer falls back to SVG generation if `matplotlib` is unavailable.
 
-- Selected topology: RC lowpass
-- Computed component values
-- Constraint validation report
-- Estimated cutoff frequency
-- Final design status
+## Demo Notes
 
----
-
-## Key Concepts
-
-### Shared Memory
-
-All agents communicate via a centralized memory object.  
-Each write operation is timestamped and stored in history.
-
-This enables:
-
-- Traceability
-- Debugging
-- Lifecycle inspection
-- Retry logic support
-
----
-
-### Design Status Model
-
-A structured design status enum tracks the current state of the pipeline:
-
-- topology_selected
-- design_invalid
-- design_validated
-- simulation_complete
-- orchestration_failed
-
----
-
-## Running the Project
-
-
-python main.py
-
-
----
+- The multi-agent progression can be shown with `SHOW_HISTORY=1`, which prints the recent write and agent-execution timeline for a run.
+- The orchestration behavior for retries, failures, and refinement loops lives in `flow/design_flow.py`, which is useful backup material during architecture discussions.
 
 ## Dataset
 
-This project utilizes the Masala-CHAI large-scale SPICE netlist dataset for analog circuits.
-
-The dataset is **not included in this repository**.
-
-To use the dataset:
-
-1. Download it from the official Masala-CHAI repository.
-2. Extract it into a local `data/` directory.
-3. Ensure `data/` is excluded via `.gitignore`.
-
-The dataset is omitted to:
-- Avoid repository bloat  
-- Maintain clean version control  
-- Follow best practices for ML research repositories  
-
----
-
-## Project Goals
-
-- Demonstrate structured AI orchestration
-- Enforce constraint-aware validation
-- Model design lifecycle state transitions
-- Simulate an AI-assisted EDA workflow
-
----
-
-## Future Extensions
-
-- Additional filter topologies
-- Optimization loops
-- Multi-stage filter synthesis
-- Expanded constraint reasoning
-
----
+This project references the Masala-CHAI SPICE netlist dataset, but the dataset itself is not included in this repository.
 
 ## Citation
 
-Bhandari, J., Bhat, V., He, Y., Rahmani, H., Garg, S., & Karri, R. (2025).
-Masala-CHAI: A Large-Scale SPICE Netlist Dataset for Analog Circuits by Harnessing AI.
-arXiv:2411.14299.
-
-BibTeX:
-
-@misc{bhandari2025masalachailargescalespicenetlist,
-      title={Masala-CHAI: A Large-Scale SPICE Netlist Dataset for Analog Circuits by Harnessing AI}, 
-      author={Jitendra Bhandari and Vineet Bhat and Yuheng He and Hamed Rahmani and Siddharth Garg and Ramesh Karri},
-      year={2025},
-      eprint={2411.14299},
-      archivePrefix={arXiv},
-      primaryClass={cs.AR},
-      url={https://arxiv.org/abs/2411.14299}
-}
-
-## Authors
-
-Austin Garner,
-Manasvi Perisetty,
-Anika Sridhar,
-Emmanuel Martinez,
-Arohan Shrestha,
-Emmanuel Ramirez
+Bhandari, J., Bhat, V., He, Y., Rahmani, H., Garg, S., & Karri, R. (2025). Masala-CHAI: A Large-Scale SPICE Netlist Dataset for Analog Circuits by Harnessing AI. arXiv:2411.14299.

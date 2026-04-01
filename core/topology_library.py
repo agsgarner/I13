@@ -47,6 +47,66 @@ TOPOLOGY_LIBRARY = {
         "constraint_template": "transconductor",
         "complexity": "medium"
     },
+    "common_drain": {
+        "name": "Common-Drain Source Follower",
+        "category": "amplifier",
+        "constraint_template": "source_follower",
+        "complexity": "medium"
+    },
+    "common_gate": {
+        "name": "Common-Gate Amplifier",
+        "category": "amplifier",
+        "constraint_template": "common_gate_amp",
+        "complexity": "medium"
+    },
+    "source_degenerated_cs": {
+        "name": "Source-Degenerated Common-Source Amplifier",
+        "category": "amplifier",
+        "constraint_template": "amplifier_source_degenerated",
+        "complexity": "medium"
+    },
+    "common_source_active_load": {
+        "name": "Common-Source Amplifier with Active Load",
+        "category": "amplifier",
+        "constraint_template": "amplifier_active_load",
+        "complexity": "medium"
+    },
+    "diode_connected_stage": {
+        "name": "Diode-Connected MOS Amplifier",
+        "category": "amplifier",
+        "constraint_template": "amplifier_active_load",
+        "complexity": "medium"
+    },
+    "cascode_amplifier": {
+        "name": "NMOS Cascode Amplifier",
+        "category": "amplifier",
+        "constraint_template": "amplifier_cascode",
+        "complexity": "high"
+    },
+    "nand2_cmos": {
+        "name": "CMOS 2-Input NAND Gate",
+        "category": "digital",
+        "constraint_template": "digital_cmos_gate",
+        "complexity": "medium"
+    },
+    "sram6t_cell": {
+        "name": "6T SRAM Cell",
+        "category": "memory",
+        "constraint_template": "memory_sram_cell",
+        "complexity": "high"
+    },
+    "lc_oscillator_cross_coupled": {
+        "name": "Cross-Coupled LC Oscillator",
+        "category": "oscillator",
+        "constraint_template": "oscillator_lc",
+        "complexity": "high"
+    },
+    "bandgap_reference_core": {
+        "name": "Bandgap Reference Core",
+        "category": "reference",
+        "constraint_template": "reference_bandgap",
+        "complexity": "high"
+    },
     "two_stage_miller": {
         "name": "Two-Stage Op-Amp with Miller Compensation",
         "category": "opamp",

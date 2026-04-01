@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 from agents.base_agent import BaseAgent
+from agents.design_status import DesignStatus
 from core.shared_memory import SharedMemory
 from core.topology_library import TOPOLOGY_LIBRARY
 
@@ -31,6 +32,15 @@ class ConstraintAgent(BaseAgent):
         ],
         "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"],
         "transconductor": ["target_gm_s"],
+        "source_follower": ["supply_v"],
+        "common_gate_amp": ["supply_v"],
+        "amplifier_source_degenerated": ["supply_v", "target_gain_db", "target_bw_hz", "power_limit_mw"],
+        "amplifier_active_load": ["supply_v", "target_gain_db", "power_limit_mw"],
+        "amplifier_cascode": ["supply_v", "target_gain_db", "power_limit_mw"],
+        "digital_cmos_gate": ["supply_v"],
+        "memory_sram_cell": ["supply_v"],
+        "oscillator_lc": ["supply_v"],
+        "reference_bandgap": ["supply_v"],
         "comparator": ["supply_v"]
     }
 
@@ -41,7 +51,17 @@ class ConstraintAgent(BaseAgent):
         "bjt_diff_pair": ["I_tail", "Ic_each", "R_C", "gm_each"],
         "current_mirror": ["W_ref", "L_ref", "W_out", "L_out", "I_ref"],
         "two_stage_miller": ["Cc_f", "gm1_target_s", "I_stage1_a", "I_stage2_a"],
-        "gm_stage": ["gm_target_s", "I_bias_a", "W_m", "L_m"]
+        "gm_stage": ["gm_target_s", "I_bias_a", "W_m", "L_m"],
+        "common_drain": ["W_m", "L_m", "I_bias", "R_source", "Vbias"],
+        "common_gate": ["W_m", "L_m", "I_bias", "R_D", "Vbias"],
+        "source_degenerated_cs": ["W_m", "L_m", "R_D", "I_bias", "R_S"],
+        "common_source_active_load": ["W_n", "L_n", "W_p", "L_p", "I_bias"],
+        "diode_connected_stage": ["W_n", "L_n", "W_p", "L_p", "I_bias"],
+        "cascode_amplifier": ["W_in", "L_in", "W_cas", "L_cas", "R_D", "I_bias", "Vbias_cas"],
+        "nand2_cmos": ["W_n", "L_n", "W_p", "L_p", "C_load"],
+        "sram6t_cell": ["W_pullup", "L_pullup", "W_pulldown", "L_pulldown", "W_access", "L_access"],
+        "lc_oscillator_cross_coupled": ["W_pair", "L_pair", "L_tank", "C_tank", "I_tail"],
+        "bandgap_reference_core": ["I_core", "area_ratio", "R1_ohm", "R2_ohm"],
     }
 
     POSITIVE_CONSTRAINTS_BY_TEMPLATE = {
@@ -52,6 +72,15 @@ class ConstraintAgent(BaseAgent):
         "opamp_two_stage": ["supply_v", "target_ugbw_hz", "power_limit_mw"],
         "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"],
         "transconductor": ["target_gm_s"],
+        "source_follower": ["supply_v"],
+        "common_gate_amp": ["supply_v"],
+        "amplifier_source_degenerated": ["supply_v", "target_bw_hz", "power_limit_mw"],
+        "amplifier_active_load": ["supply_v", "power_limit_mw"],
+        "amplifier_cascode": ["supply_v", "power_limit_mw"],
+        "digital_cmos_gate": ["supply_v"],
+        "memory_sram_cell": ["supply_v"],
+        "oscillator_lc": ["supply_v"],
+        "reference_bandgap": ["supply_v"],
         "comparator": ["supply_v"]
     }
 
@@ -74,14 +103,14 @@ class ConstraintAgent(BaseAgent):
         if issues:
             report = ConstraintReport(False, issues=issues, warnings=warnings)
             memory.write("constraints_report", report.__dict__)
-            memory.write("status", "constraints_failed")
+            memory.write("status", DesignStatus.CONSTRAINTS_FAILED)
             return state, report
 
         topology_meta = TOPOLOGY_LIBRARY.get(topology_key)
         if topology_meta is None:
             report = ConstraintReport(False, issues=[f"Unknown topology '{topology_key}'"])
             memory.write("constraints_report", report.__dict__)
-            memory.write("status", "constraints_failed")
+            memory.write("status", DesignStatus.CONSTRAINTS_FAILED)
             return state, report
 
         template = topology_meta["constraint_template"]
@@ -174,6 +203,11 @@ class ConstraintAgent(BaseAgent):
             if pm is not None and pm < 50:
                 warnings.append("Requested phase margin is low for a stable design.")
 
+        elif topology_key == "bandgap_reference_core":
+            ratio = sizing.get("R2_ohm", 0.0) / max(sizing.get("R1_ohm", 1.0), 1e-30)
+            if ratio < 5 or ratio > 20:
+                warnings.append("Bandgap resistor ratio is outside the usual first-pass range.")
+
         passed = len(issues) == 0
 
         report = ConstraintReport(
@@ -187,5 +221,5 @@ class ConstraintAgent(BaseAgent):
         )
 
         memory.write("constraints_report", report.__dict__)
-        memory.write("status", "constraints_ok" if passed else "constraints_failed")
+        memory.write("status", DesignStatus.CONSTRAINTS_OK if passed else DesignStatus.CONSTRAINTS_FAILED)
         return state, report

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
 from agents.base_agent import BaseAgent
+from agents.design_status import DesignStatus
 from core.shared_memory import SharedMemory
 
 
@@ -42,7 +43,7 @@ class RefinementAgent(BaseAgent):
         if not topo:
             report = RefinementReport(False, {}, ["No topology found"], "stop")
             memory.write("refinement_report", report.__dict__)
-            memory.write("status", "refinement_skipped")
+            memory.write("status", DesignStatus.REFINEMENT_SKIPPED)
             return state, report
 
         if topo == "rc_lowpass":
@@ -60,7 +61,7 @@ class RefinementAgent(BaseAgent):
                 next_action="stop",
             )
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_skipped"
+            state["status"] = DesignStatus.REFINEMENT_SKIPPED
 
         memory.update({
             "sizing": state.get("sizing"),
@@ -93,13 +94,13 @@ class RefinementAgent(BaseAgent):
         if target_fc is None:
             report = RefinementReport(False, {}, ["Missing target_fc_hz"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         if fc_used is None:
             report = RefinementReport(False, {}, ["Missing simulation_results.fc_hz"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         R = float(sizing.get("R_ohm", 0.0))
@@ -107,14 +108,14 @@ class RefinementAgent(BaseAgent):
         if R <= 0 or C <= 0:
             report = RefinementReport(False, {}, ["Invalid R_ohm or C_f in sizing"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         ratio = fc_used / target_fc
         if ratio <= 0:
             report = RefinementReport(False, {}, ["Bad fc ratio"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         rel_err = abs(fc_used - target_fc) / target_fc
@@ -134,7 +135,7 @@ class RefinementAgent(BaseAgent):
                 next_action="stop",
             )
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_no_change"
+            state["status"] = DesignStatus.REFINEMENT_NO_CHANGE
             return state, report
 
         desired_RC_scale = self._clamp_abs(ratio)
@@ -158,7 +159,7 @@ class RefinementAgent(BaseAgent):
             next_action="rerun_constraints_and_spice",
         )
         state["refinement_report"] = report.__dict__
-        state["status"] = "refined"
+        state["status"] = DesignStatus.REFINED
         return state, report
 
     def _refine_common_source(
@@ -183,7 +184,7 @@ class RefinementAgent(BaseAgent):
         if W is None or I is None or RD is None:
             report = RefinementReport(False, {}, ["Missing sizing keys (W_m, I_bias, R_D)"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         W = float(W)
@@ -259,7 +260,7 @@ class RefinementAgent(BaseAgent):
             next_action="rerun_constraints_and_spice" if changed else "stop"
         )
         state["refinement_report"] = report.__dict__
-        state["status"] = "refined" if changed else "refinement_no_change"
+        state["status"] = DesignStatus.REFINED if changed else DesignStatus.REFINEMENT_NO_CHANGE
         return state, report
 
     def _refine_current_mirror(self, state, constraints, sizing, sim):
@@ -268,14 +269,14 @@ class RefinementAgent(BaseAgent):
         if target_i is None or sim_i is None or sim_i <= 0:
             report = RefinementReport(False, {}, ["Missing mirror current results"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_failed"
+            state["status"] = DesignStatus.REFINEMENT_FAILED
             return state, report
 
         err = abs(sim_i - target_i) / target_i
         if err < 0.05:
             report = RefinementReport(False, {}, ["Mirror current already within 5%"], "stop")
             state["refinement_report"] = report.__dict__
-            state["status"] = "refinement_no_change"
+            state["status"] = DesignStatus.REFINEMENT_NO_CHANGE
             return state, report
 
         factor = self._clamp_step(target_i / sim_i)
@@ -290,5 +291,5 @@ class RefinementAgent(BaseAgent):
             "rerun_constraints_and_spice",
         )
         state["refinement_report"] = report.__dict__
-        state["status"] = "refined"
+        state["status"] = DesignStatus.REFINED
         return state, report

@@ -6,14 +6,30 @@ import re
 import shutil
 import subprocess
 import tempfile
+from html import escape
 from datetime import datetime
 from core.analog_defaults import ANALOG_DEFAULTS
 
 from agents.base_agent import BaseAgent
+from agents.design_status import DesignStatus
 from core.shared_memory import SharedMemory
 
 
 class SimulationAgent(BaseAgent):
+    AC_EXPECTED_TOPOLOGIES = {
+        "rc_lowpass",
+        "common_source_res_load",
+        "diff_pair",
+        "two_stage_miller",
+        "gm_stage",
+        "common_drain",
+        "common_gate",
+        "source_degenerated_cs",
+        "common_source_active_load",
+        "diode_connected_stage",
+        "cascode_amplifier",
+    }
+
     def __init__(self, llm=None, ngspice_path=None, max_retries=1, wait=0):
         super().__init__(llm=llm, max_retries=max_retries, wait=wait)
         self.ngspice_path = ngspice_path or os.getenv("NGSPICE_PATH") or self._find_ngspice()
@@ -25,12 +41,12 @@ class SimulationAgent(BaseAgent):
         constraints = self._merged_constraints(memory)
 
         if not netlist:
-            memory.write("status", "simulation_failed")
+            memory.write("status", DesignStatus.SIMULATION_FAILED)
             memory.write("simulation_error", "Missing netlist")
             return None
 
         if not self.ngspice_path:
-            memory.write("status", "simulation_failed")
+            memory.write("status", DesignStatus.SIMULATION_FAILED)
             memory.write("simulation_error", "ngspice not found")
             return None
 
@@ -72,10 +88,11 @@ class SimulationAgent(BaseAgent):
 
             if result.returncode != 0:
                 memory.write("simulation_results", sim)
-                memory.write("status", "simulation_failed")
+                memory.write("status", DesignStatus.SIMULATION_FAILED)
                 return sim
 
             ac_csv = os.path.join(tmpdir, "ac_out.csv")
+            dc_csv = os.path.join(tmpdir, "dc_out.csv")
             tran_in_csv = os.path.join(tmpdir, "tran_in.csv")
             tran_out_csv = os.path.join(tmpdir, "tran_out.csv")
 
@@ -93,7 +110,7 @@ class SimulationAgent(BaseAgent):
 
                 if ac_data["x"] and ac_data["y"]:
                     sim["ac_points"] = len(ac_data["x"])
-                    ac_plot = os.path.join(base_dir, "ac_plot.png")
+                    ac_plot = os.path.join(base_dir, "ac_plot.svg")
                     input_ac_mag = float(constraints.get("vin_ac", 1.0))
                     self._plot_ac(ac_data, ac_plot, input_ac_mag=input_ac_mag)
                     sim["ac_plot"] = ac_plot
@@ -110,16 +127,39 @@ class SimulationAgent(BaseAgent):
                     sim["parser_warning"] = (
                         "AC file was created, but parser could not extract usable AC points."
                     )
-            else:
-                sim["parser_warning"] = (
-                    "ac_out.csv was not created by ngspice; using formula-based cutoff."
-                )
+            elif topology in self.AC_EXPECTED_TOPOLOGIES:
+                if topology == "rc_lowpass":
+                    sim["parser_warning"] = (
+                        "ac_out.csv was not created by ngspice; using formula-based cutoff."
+                    )
+                else:
+                    sim["parser_warning"] = (
+                        "ac_out.csv was not created by ngspice; AC metrics could not be extracted."
+                    )
+
+            # -------------------------
+            # DC artifacts
+            # -------------------------
+            if os.path.exists(dc_csv):
+                saved_dc_csv = os.path.join(base_dir, "dc_out.csv")
+                shutil.copy2(dc_csv, saved_dc_csv)
+                sim["dc_csv"] = saved_dc_csv
+                sim["dc_preview"] = self._preview_file(saved_dc_csv, max_lines=8)
+
+                dc_data = self._read_wrdata_xy(saved_dc_csv)
+                if dc_data["x"] and dc_data["y"]:
+                    sim["dc_points"] = len(dc_data["x"])
+                    dc_plot = os.path.join(base_dir, "dc_plot.svg")
+                    self._plot_dc(dc_data, dc_plot, xlabel="Sweep Variable", ylabel="Output")
+                    sim["dc_plot"] = dc_plot
 
             # -------------------------
             # Transient artifacts
             # -------------------------
             tran_in_data = None
             tran_out_data = None
+            tran_qb_data = None
+            tran_diff_data = None
 
             if os.path.exists(tran_in_csv):
                 saved_tran_in_csv = os.path.join(base_dir, "tran_in.csv")
@@ -134,8 +174,22 @@ class SimulationAgent(BaseAgent):
                 sim["tran_preview"] = self._preview_file(saved_tran_out_csv, max_lines=5)
                 tran_out_data = self._read_wrdata_xy(saved_tran_out_csv)
 
+            tran_qb_csv = os.path.join(tmpdir, "tran_qb.csv")
+            if os.path.exists(tran_qb_csv):
+                saved_tran_qb_csv = os.path.join(base_dir, "tran_qb.csv")
+                shutil.copy2(tran_qb_csv, saved_tran_qb_csv)
+                sim["tran_qb_csv"] = saved_tran_qb_csv
+                tran_qb_data = self._read_wrdata_xy(saved_tran_qb_csv)
+
+            tran_diff_csv = os.path.join(tmpdir, "tran_diff.csv")
+            if os.path.exists(tran_diff_csv):
+                saved_tran_diff_csv = os.path.join(base_dir, "tran_diff.csv")
+                shutil.copy2(tran_diff_csv, saved_tran_diff_csv)
+                sim["tran_diff_csv"] = saved_tran_diff_csv
+                tran_diff_data = self._read_wrdata_xy(saved_tran_diff_csv)
+
             if tran_out_data and tran_out_data["x"] and tran_out_data["y"]:
-                tran_plot = os.path.join(base_dir, "tran_plot.png")
+                tran_plot = os.path.join(base_dir, "tran_plot.svg")
                 self._plot_tran(tran_in_data, tran_out_data, tran_plot)
                 sim["tran_plot"] = tran_plot
                 sim["tran_points"] = len(tran_out_data["x"])
@@ -151,8 +205,31 @@ class SimulationAgent(BaseAgent):
                     if sim_i is not None:
                         sim["iout_a"] = abs(sim_i)
 
-                if topology in ("common_source_res_load", "diff_pair", "two_stage_miller"):
+                if topology == "bandgap_reference_core":
+                    vref = self._extract_named_voltage_from_log(sim.get("log_preview"), "v(ref)")
+                    if vref is not None:
+                        sim["vref_v"] = vref
+
+                if topology in (
+                    "common_source_res_load",
+                    "source_degenerated_cs",
+                    "common_source_active_load",
+                    "diode_connected_stage",
+                    "cascode_amplifier",
+                    "common_drain",
+                    "common_gate",
+                    "diff_pair",
+                    "two_stage_miller",
+                    "bandgap_reference_core",
+                ):
                     sim["op_summary"] = self._extract_op_region_summary(sim.get("log_preview"))
+
+                if topology == "lc_oscillator_cross_coupled":
+                    aborted = any("aborted" in (line or "").lower() for line in sim.get("log_preview", []))
+                    if aborted:
+                        sim["parser_warning"] = (
+                            "Transient oscillation run was numerically unstable; using LC tank formula estimate."
+                        )
                     
 
             # -------------------------
@@ -184,14 +261,48 @@ class SimulationAgent(BaseAgent):
                 else:
                     sim["fc_hz"] = fc_ac
             
-            if topology == "common_source_res_load":
+            if topology in (
+                "common_source_res_load",
+                "source_degenerated_cs",
+                "common_source_active_load",
+                "diode_connected_stage",
+                "cascode_amplifier",
+                "common_drain",
+                "common_gate",
+            ):
                 vdd = memory.read("constraints").get("supply_v")
                 ibias = sizing.get("I_bias")
                 if vdd is not None and ibias is not None:
                     sim["power_mw"] = 1000.0 * float(vdd) * float(ibias)
+
+            if topology == "lc_oscillator_cross_coupled":
+                osc_data = tran_diff_data or tran_out_data
+                f_osc = self._estimate_oscillation_frequency(osc_data)
+                if f_osc is not None:
+                    sim["oscillation_hz"] = f_osc
+                else:
+                    f_formula = self._estimate_lc_formula_frequency(sizing)
+                    if f_formula is not None:
+                        sim["oscillation_hz"] = f_formula
+
+            if topology == "sram6t_cell":
+                vdd = float(memory.read("constraints").get("supply_v", 1.2))
+                q_final = self._last_value(tran_out_data)
+                qb_final = self._last_value(tran_qb_data)
+                if q_final is not None:
+                    sim["q_final_v"] = q_final
+                if qb_final is not None:
+                    sim["qb_final_v"] = qb_final
+                if q_final is not None and qb_final is not None:
+                    sim["write_ok"] = (q_final > 0.7 * vdd) and (qb_final < 0.3 * vdd)
+
+            if topology == "bandgap_reference_core" and sim.get("vref_v") is None:
+                vref = self._last_value(tran_out_data)
+                if vref is not None:
+                    sim["vref_v"] = vref
                     
             memory.write("simulation_results", sim)
-            memory.write("status", "simulation_complete")
+            memory.write("status", DesignStatus.SIMULATION_COMPLETE)
             return sim
 
     def _find_ngspice(self):
@@ -212,16 +323,18 @@ class SimulationAgent(BaseAgent):
         return f"{timestamp}_{topology_slug}_attempt_{attempt:02d}"
 
     def _get_pyplot(self):
-        mpl_dir = os.path.join(tempfile.gettempdir(), "i13-mplconfig")
-        os.makedirs(mpl_dir, exist_ok=True)
-        os.environ.setdefault("MPLCONFIGDIR", mpl_dir)
+        try:
+            mpl_dir = os.path.join(tempfile.gettempdir(), "i13-mplconfig")
+            os.makedirs(mpl_dir, exist_ok=True)
+            os.environ.setdefault("MPLCONFIGDIR", mpl_dir)
 
-        import matplotlib
+            import matplotlib
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        return plt
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            return plt
+        except Exception:
+            return None
 
     def _safe_write_text(self, path, text):
         with open(path, "w") as f:
@@ -335,40 +448,94 @@ class SimulationAgent(BaseAgent):
         if not data["x"] or not data["y"]:
             return
 
-        plt = self._get_pyplot()
         input_ac_mag = max(float(input_ac_mag), 1e-20)
         mags = [max(abs(v) / input_ac_mag, 1e-20) for v in data["y"]]
         mags_db = [20.0 * math.log10(v) for v in mags]
 
-        plt.figure(figsize=(8, 5))
-        plt.semilogx(data["x"], mags_db)
-        plt.xlabel("Frequency (Hz)")
-        plt.ylabel("Gain (dB)")
-        plt.title("AC Response |V(out)/V(in)|")
-        plt.grid(True, which="both")
-        plt.tight_layout()
-        plt.savefig(out_path, dpi=160)
-        plt.close()
+        plt = self._get_pyplot()
+        if plt is not None:
+            plt.figure(figsize=(8, 5))
+            plt.semilogx(data["x"], mags_db)
+            plt.xlabel("Frequency (Hz)")
+            plt.ylabel("Gain (dB)")
+            plt.title("AC Response |V(out)/V(in)|")
+            plt.grid(True, which="both")
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=160)
+            plt.close()
+            return
+
+        transformed_x = [math.log10(max(x, 1e-30)) for x in data["x"]]
+        self._write_svg_plot(
+            out_path=out_path,
+            x_values=transformed_x,
+            y_series=[("Gain (dB)", mags_db, "#0f766e")],
+            title="AC Response |V(out)/V(in)|",
+            xlabel="log10(Frequency [Hz])",
+            ylabel="Gain (dB)",
+        )
 
     def _plot_tran(self, tran_in_data, tran_out_data, out_path):
         if not tran_out_data or not tran_out_data["x"] or not tran_out_data["y"]:
             return
 
         plt = self._get_pyplot()
-        plt.figure(figsize=(8, 5))
+        if plt is not None:
+            plt.figure(figsize=(8, 5))
 
+            if tran_in_data and tran_in_data["x"] and tran_in_data["y"]:
+                plt.plot(tran_in_data["x"], tran_in_data["y"], label="V(in)")
+
+            plt.plot(tran_out_data["x"], tran_out_data["y"], label="V(out)")
+            plt.xlabel("Time (s)")
+            plt.ylabel("Voltage (V)")
+            plt.title("Transient Response")
+            plt.grid(True)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=160)
+            plt.close()
+            return
+
+        series = [("V(out)", tran_out_data["y"], "#1d4ed8")]
         if tran_in_data and tran_in_data["x"] and tran_in_data["y"]:
-            plt.plot(tran_in_data["x"], tran_in_data["y"], label="V(in)")
+            series.insert(0, ("V(in)", tran_in_data["y"], "#dc2626"))
 
-        plt.plot(tran_out_data["x"], tran_out_data["y"], label="V(out)")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Voltage (V)")
-        plt.title("Transient Response")
-        plt.grid(True)
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(out_path, dpi=160)
-        plt.close()
+        self._write_svg_plot(
+            out_path=out_path,
+            x_values=tran_out_data["x"],
+            y_series=series,
+            title="Transient Response",
+            xlabel="Time (s)",
+            ylabel="Voltage (V)",
+        )
+
+    def _plot_dc(self, dc_data, out_path, xlabel="Input", ylabel="Output"):
+        if not dc_data or not dc_data["x"] or not dc_data["y"]:
+            return
+
+        plt = self._get_pyplot()
+        if plt is not None:
+            plt.figure(figsize=(8, 5))
+            plt.plot(dc_data["x"], dc_data["y"], label=ylabel)
+            plt.xlabel(xlabel)
+            plt.ylabel(ylabel)
+            plt.title("DC Sweep")
+            plt.grid(True)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=160)
+            plt.close()
+            return
+
+        self._write_svg_plot(
+            out_path=out_path,
+            x_values=dc_data["x"],
+            y_series=[(ylabel, dc_data["y"], "#7c3aed")],
+            title="DC Sweep",
+            xlabel=xlabel,
+            ylabel=ylabel,
+        )
 
     def _estimate_cutoff_from_ac(self, data):
         """
@@ -428,9 +595,30 @@ class SimulationAgent(BaseAgent):
     
     def _extract_current_from_log(self, preview_lines):
         for line in preview_lines or []:
-            nums = self._extract_numeric_tokens(line)
-            if nums:
-                return nums[-1]
+            match = re.search(
+                r"(?:i\([^)]+\)|iop|iout)\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)",
+                line,
+                re.IGNORECASE,
+            )
+            if match:
+                try:
+                    return float(match.group(1))
+                except ValueError:
+                    return None
+        return None
+
+    def _extract_named_voltage_from_log(self, preview_lines, token):
+        token = token.lower()
+        for line in preview_lines or []:
+            line_lower = line.lower()
+            if token not in line_lower:
+                continue
+            match = re.search(rf"{re.escape(token)}\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)", line_lower)
+            if match:
+                try:
+                    return float(match.group(1))
+                except ValueError:
+                    return None
         return None
 
     def _extract_op_region_summary(self, log_preview):
@@ -461,3 +649,154 @@ class SimulationAgent(BaseAgent):
         merged.update(ANALOG_DEFAULTS.get("simulation", {}))
         merged.update(memory.read("constraints") or {})
         return merged
+
+    def _last_value(self, data):
+        if not data or not data.get("y"):
+            return None
+        try:
+            return float(data["y"][-1])
+        except Exception:
+            return None
+
+    def _estimate_oscillation_frequency(self, data):
+        if not data:
+            return None
+        xs = data.get("x", [])
+        ys = data.get("y", [])
+        if len(xs) < 20 or len(ys) < 20:
+            return None
+
+        start_idx = len(xs) // 4
+        crossings = []
+        prev = ys[start_idx]
+        for idx in range(start_idx + 1, len(ys)):
+            cur = ys[idx]
+            if prev <= 0 < cur:
+                t1 = xs[idx - 1]
+                t2 = xs[idx]
+                y1 = prev
+                y2 = cur
+                if abs(y2 - y1) < 1e-30:
+                    crossings.append(t2)
+                else:
+                    frac = (0 - y1) / (y2 - y1)
+                    crossings.append(t1 + frac * (t2 - t1))
+            prev = cur
+
+        if len(crossings) < 2:
+            return None
+
+        periods = [crossings[i] - crossings[i - 1] for i in range(1, len(crossings)) if crossings[i] > crossings[i - 1]]
+        if not periods:
+            return None
+        avg_period = sum(periods) / len(periods)
+        if avg_period <= 0:
+            return None
+        return 1.0 / avg_period
+
+    def _estimate_lc_formula_frequency(self, sizing):
+        try:
+            l_tank = float(sizing.get("L_tank", 0.0))
+            c_tank = float(sizing.get("C_tank", 0.0))
+        except Exception:
+            return None
+        if l_tank <= 0 or c_tank <= 0:
+            return None
+        return 1.0 / (2.0 * math.pi * math.sqrt(l_tank * c_tank))
+
+    def _write_svg_plot(self, out_path, x_values, y_series, title, xlabel, ylabel):
+        width = 960
+        height = 540
+        margin_left = 80
+        margin_right = 24
+        margin_top = 52
+        margin_bottom = 68
+        plot_width = width - margin_left - margin_right
+        plot_height = height - margin_top - margin_bottom
+
+        finite_x = [float(x) for x in x_values if x is not None]
+        finite_y = [
+            float(value)
+            for _, values, _ in y_series
+            for value in values
+            if value is not None
+        ]
+        if len(finite_x) < 2 or len(finite_y) < 2:
+            return
+
+        x_min = min(finite_x)
+        x_max = max(finite_x)
+        y_min = min(finite_y)
+        y_max = max(finite_y)
+
+        if abs(x_max - x_min) < 1e-30:
+            x_max = x_min + 1.0
+        if abs(y_max - y_min) < 1e-30:
+            y_max = y_min + 1.0
+
+        def scale_x(x):
+            return margin_left + (float(x) - x_min) / (x_max - x_min) * plot_width
+
+        def scale_y(y):
+            return margin_top + (1.0 - (float(y) - y_min) / (y_max - y_min)) * plot_height
+
+        def axis_ticks(vmin, vmax, count=5):
+            step = (vmax - vmin) / max(count - 1, 1)
+            return [vmin + idx * step for idx in range(count)]
+
+        lines = [
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+            '<rect width="100%" height="100%" fill="#fcfcfd"/>',
+            f'<text x="{width / 2:.1f}" y="28" text-anchor="middle" font-size="20" font-family="Arial, sans-serif" fill="#111827">{escape(title)}</text>',
+            f'<line x1="{margin_left}" y1="{margin_top + plot_height}" x2="{margin_left + plot_width}" y2="{margin_top + plot_height}" stroke="#111827" stroke-width="1.2"/>',
+            f'<line x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{margin_top + plot_height}" stroke="#111827" stroke-width="1.2"/>',
+        ]
+
+        for x_tick in axis_ticks(x_min, x_max):
+            x_pos = scale_x(x_tick)
+            lines.append(
+                f'<line x1="{x_pos:.2f}" y1="{margin_top}" x2="{x_pos:.2f}" y2="{margin_top + plot_height}" stroke="#e5e7eb" stroke-width="1"/>'
+            )
+            lines.append(
+                f'<text x="{x_pos:.2f}" y="{height - 28}" text-anchor="middle" font-size="11" font-family="Arial, sans-serif" fill="#374151">{x_tick:.3g}</text>'
+            )
+
+        for y_tick in axis_ticks(y_min, y_max):
+            y_pos = scale_y(y_tick)
+            lines.append(
+                f'<line x1="{margin_left}" y1="{y_pos:.2f}" x2="{margin_left + plot_width}" y2="{y_pos:.2f}" stroke="#e5e7eb" stroke-width="1"/>'
+            )
+            lines.append(
+                f'<text x="{margin_left - 10}" y="{y_pos + 4:.2f}" text-anchor="end" font-size="11" font-family="Arial, sans-serif" fill="#374151">{y_tick:.3g}</text>'
+            )
+
+        legend_x = margin_left + 8
+        legend_y = margin_top - 18
+        for idx, (label, values, color) in enumerate(y_series):
+            points = []
+            for x, y in zip(x_values, values):
+                if x is None or y is None:
+                    continue
+                points.append(f"{scale_x(x):.2f},{scale_y(y):.2f}")
+            if len(points) >= 2:
+                lines.append(
+                    f'<polyline fill="none" stroke="{color}" stroke-width="2.2" points="{" ".join(points)}"/>'
+                )
+            label_y = legend_y + idx * 18
+            lines.append(
+                f'<line x1="{legend_x}" y1="{label_y}" x2="{legend_x + 18}" y2="{label_y}" stroke="{color}" stroke-width="3"/>'
+            )
+            lines.append(
+                f'<text x="{legend_x + 24}" y="{label_y + 4}" font-size="12" font-family="Arial, sans-serif" fill="#111827">{escape(label)}</text>'
+            )
+
+        lines.extend(
+            [
+                f'<text x="{width / 2:.1f}" y="{height - 8}" text-anchor="middle" font-size="13" font-family="Arial, sans-serif" fill="#111827">{escape(xlabel)}</text>',
+                f'<text x="20" y="{height / 2:.1f}" text-anchor="middle" font-size="13" font-family="Arial, sans-serif" fill="#111827" transform="rotate(-90 20 {height / 2:.1f})">{escape(ylabel)}</text>',
+                "</svg>",
+            ]
+        )
+
+        with open(out_path, "w") as f:
+            f.write("\n".join(lines))

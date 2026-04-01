@@ -1,6 +1,7 @@
 # I13/agents/topology_agent.py
 
 from agents.base_agent import BaseAgent
+from agents.design_status import DesignStatus
 from core.shared_memory import SharedMemory
 from core.topology_library import TOPOLOGY_LIBRARY
 from core.analog_defaults import ANALOG_DEFAULTS
@@ -10,9 +11,10 @@ class TopologyAgent(BaseAgent):
     def run_agent(self, memory: SharedMemory):
         spec = (memory.read("specification") or "").lower()
         constraints = self._merged_defaults(memory.read("constraints") or {})
+        case_meta = memory.read("case_metadata") or {}
 
         if not spec:
-            memory.write("status", "topology_failed")
+            memory.write("status", DesignStatus.TOPOLOGY_FAILED)
             memory.write("topology_error", "Missing specification")
             return None
 
@@ -20,13 +22,19 @@ class TopologyAgent(BaseAgent):
         confidence = 0.0
         reasoning = ""
 
-        rule_result = self._rule_based_topology(spec, constraints)
-        if rule_result is not None:
-            topology, confidence, reasoning = rule_result
+        forced_topology = case_meta.get("forced_topology") or constraints.get("forced_topology")
+        if forced_topology in TOPOLOGY_LIBRARY:
+            topology = forced_topology
+            confidence = 0.99
+            reasoning = "Case metadata forced the demo topology."
         else:
-            llm_result = self._llm_topology(spec, constraints)
-            if llm_result is not None:
-                topology, confidence, reasoning = llm_result
+            rule_result = self._rule_based_topology(spec, constraints)
+            if rule_result is not None:
+                topology, confidence, reasoning = rule_result
+            else:
+                llm_result = self._llm_topology(spec, constraints)
+                if llm_result is not None:
+                    topology, confidence, reasoning = llm_result
 
         # deterministic fallback so the flow never dies on a missing topology
         if topology not in TOPOLOGY_LIBRARY:
@@ -34,7 +42,7 @@ class TopologyAgent(BaseAgent):
             topology, confidence, reasoning = fallback
 
         if topology not in TOPOLOGY_LIBRARY:
-            memory.write("status", "topology_failed")
+            memory.write("status", DesignStatus.TOPOLOGY_FAILED)
             memory.write("topology_error", f"Invalid topology returned: {topology}")
             memory.write("topology_raw_response", {"topology": topology})
             return None
@@ -43,7 +51,7 @@ class TopologyAgent(BaseAgent):
         memory.write("topology_metadata", TOPOLOGY_LIBRARY[topology])
         memory.write("topology_confidence", confidence)
         memory.write("topology_reasoning", reasoning)
-        memory.write("status", "topology_selected")
+        memory.write("status", DesignStatus.TOPOLOGY_SELECTED)
         memory.append_history("topology_selected", topology)
 
         return {
@@ -73,6 +81,54 @@ class TopologyAgent(BaseAgent):
         ])
         if conf >= 0.45:
             return ("diff_pair", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("source follower" in spec or "common-drain" in spec or "common drain" in spec, 0.55, "source follower wording"),
+        ])
+        if conf >= 0.50:
+            return ("common_drain", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("common-gate" in spec or "common gate" in spec, 0.55, "common-gate wording"),
+        ])
+        if conf >= 0.50:
+            return ("common_gate", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("source-degenerated" in spec or "source degenerated" in spec, 0.55, "source degeneration wording"),
+        ])
+        if conf >= 0.50:
+            return ("source_degenerated_cs", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("active load" in spec, 0.55, "active-load wording"),
+        ])
+        if conf >= 0.50:
+            return ("common_source_active_load", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("cascode" in spec, 0.55, "cascode wording"),
+        ])
+        if conf >= 0.50:
+            return ("cascode_amplifier", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("nand" in spec, 0.70, "NAND wording"),
+        ])
+        if conf >= 0.50:
+            return ("nand2_cmos", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("sram" in spec, 0.70, "SRAM wording"),
+        ])
+        if conf >= 0.50:
+            return ("sram6t_cell", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("lc oscillator" in spec or "cross-coupled oscillator" in spec or "cross coupled oscillator" in spec, 0.70, "oscillator wording"),
+        ])
+        if conf >= 0.50:
+            return ("lc_oscillator_cross_coupled", conf, f"Matched by: {', '.join(reasons)}")
 
         conf, reasons = self._score_match([
             ("gm stage" in spec or "transconductance" in spec or "ota" in spec, 0.55, "gm/ota wording"),
@@ -110,6 +166,7 @@ class TopologyAgent(BaseAgent):
 
         prompt = f"""
             You are selecting an analog circuit topology.
+            Choose the single best topology key.
 
             Available topology keys:
             {list(TOPOLOGY_LIBRARY.keys())}

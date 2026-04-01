@@ -12,7 +12,10 @@ class LocalLLMStub(LLMInterface):
     def generate(self, prompt: str):
         prompt_lower = prompt.lower()
 
-        if "choose the single best topology key" in prompt_lower:
+        if (
+            "available topology keys" in prompt_lower
+            and "return json only" in prompt_lower
+        ) or "choose the single best topology key" in prompt_lower:
             if "low-pass" in prompt_lower or "lowpass" in prompt_lower:
                 return {
                     "topology": "rc_lowpass",
@@ -35,6 +38,27 @@ class LocalLLMStub(LLMInterface):
                     "topology": "current_mirror",
                     "confidence": 0.85,
                     "reasoning": "A current mirror is the standard topology for current replication and biasing.",
+                }
+
+            if "source follower" in prompt_lower or "common-drain" in prompt_lower:
+                return {
+                    "topology": "common_drain",
+                    "confidence": 0.84,
+                    "reasoning": "A common-drain stage is the standard MOS buffer topology.",
+                }
+
+            if "common-gate" in prompt_lower:
+                return {
+                    "topology": "common_gate",
+                    "confidence": 0.82,
+                    "reasoning": "A common-gate topology is appropriate for low-input-impedance wideband gain stages.",
+                }
+
+            if "nand" in prompt_lower:
+                return {
+                    "topology": "nand2_cmos",
+                    "confidence": 0.9,
+                    "reasoning": "A CMOS NAND gate is the natural transistor-level implementation for the request.",
                 }
 
             return {

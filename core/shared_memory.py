@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from copy import deepcopy
+from agents.design_status import DesignStatus
 
 
 class SharedMemory:
@@ -18,7 +19,7 @@ class SharedMemory:
             "sizing_report": None,
             "refinement_report": None,
             "topology_confidence": None,
-            "status": "initialized",
+            "status": DesignStatus.INITIALIZED,
             "iteration": 0,
             "history": []
         }
@@ -47,4 +48,8 @@ class SharedMemory:
 
     def get_full_state(self):
         return deepcopy(self.state)
+
+    def get_recent_history(self, count=10):
+        count = max(0, int(count))
+        return deepcopy(self.state["history"][-count:])
     
