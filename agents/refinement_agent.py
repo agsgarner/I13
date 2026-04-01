@@ -1,3 +1,5 @@
+# I13/agents/refinement_agent.py
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
@@ -50,6 +52,7 @@ class RefinementAgent(BaseAgent):
             state, report = self._refine_common_source(state, constraints, sizing, sim)
         elif topo == "current_mirror":
             state, report = self._refine_current_mirror(state, constraints, sizing, sim)
+
         else:
             report = RefinementReport(
                 changed=False,
@@ -208,8 +211,6 @@ class RefinementAgent(BaseAgent):
             )
             I = new_I
 
-        
-
         if target_gain_db is not None and gain_db is not None:
             gain_err_db = target_gain_db - gain_db
 
@@ -224,19 +225,6 @@ class RefinementAgent(BaseAgent):
                 )
                 W = new_W
 
-                vdd = constraints.get("supply_v", 1.8)
-                max_rd_from_headroom = 0.8 * vdd / max(I, 1e-12)
-                new_RD = min(RD * 1.15, max_rd_from_headroom)
-
-                if new_RD > RD:
-                    apply_change(
-                        "R_D",
-                        RD,
-                        new_RD,
-                        f"Gain low: {gain_db:.2f} dB vs target {target_gain_db:.2f} dB. Increased R_D within headroom limit.",
-                    )
-                    RD = new_RD
-
             elif gain_err_db < -1.0:
                 step = self._clamp_step(1.0 - min(0.3, (-gain_err_db) / 30.0))
                 new_W = max(1e-9, W * step)
@@ -247,8 +235,6 @@ class RefinementAgent(BaseAgent):
                     f"Gain high: {gain_db:.2f} dB vs target {target_gain_db:.2f} dB. Decreased W_m.",
                 )
                 W = new_W
-
-            
 
         if target_bw_hz is not None and bw_hz is not None:
             bw_ratio = bw_hz / target_bw_hz if target_bw_hz > 0 else 1.0
@@ -277,13 +263,7 @@ class RefinementAgent(BaseAgent):
         state["status"] = DesignStatus.REFINED if changed else DesignStatus.REFINEMENT_NO_CHANGE
         return state, report
 
-    def _refine_current_mirror(
-        self,
-        state: Dict[str, Any],
-        constraints: Dict[str, Any],
-        sizing: Dict[str, Any],
-        sim: Dict[str, Any],
-    ) -> Tuple[Dict[str, Any], RefinementReport]:
+    def _refine_current_mirror(self, state, constraints, sizing, sim):
         target_i = constraints.get("target_iout_a")
         sim_i = sim.get("iout_a")
         if target_i is None or sim_i is None or sim_i <= 0:
@@ -299,23 +279,16 @@ class RefinementAgent(BaseAgent):
             state["status"] = DesignStatus.REFINEMENT_NO_CHANGE
             return state, report
 
-        W_out = float(sizing.get("W_out", 0.0))
-        if W_out <= 0:
-            report = RefinementReport(False, {}, ["Missing or invalid W_out"], "stop")
-            state["refinement_report"] = report.__dict__
-            state["status"] = DesignStatus.REFINEMENT_FAILED
-            return state, report
+        factor = self._clamp_step(target_i / sim_i)
+        old = float(sizing["W_out"])
+        new = old * factor
+        state["sizing"]["W_out"] = new
 
-        factor = self._clamp_abs(target_i / sim_i)
-        step = self._clamp_step(factor)
-        new_W_out = max(1e-12, W_out * step)
-
-        state["sizing"]["W_out"] = new_W_out
         report = RefinementReport(
-            changed=True,
-            changes={"W_out": {"old": W_out, "new": new_W_out, "factor": step}},
-            notes=[f"Adjusted mirror output width to move iout from {sim_i:.3e} A toward {target_i:.3e} A."],
-            next_action="rerun_constraints_and_spice",
+            True,
+            {"W_out": {"old": old, "new": new, "factor": factor}},
+            [f"Adjusted W_out to move output current from {sim_i:.3g} A toward {target_i:.3g} A."],
+            "rerun_constraints_and_spice",
         )
         state["refinement_report"] = report.__dict__
         state["status"] = DesignStatus.REFINED
