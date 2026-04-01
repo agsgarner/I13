@@ -208,6 +208,8 @@ class RefinementAgent(BaseAgent):
             )
             I = new_I
 
+        
+
         if target_gain_db is not None and gain_db is not None:
             gain_err_db = target_gain_db - gain_db
 
@@ -222,14 +224,18 @@ class RefinementAgent(BaseAgent):
                 )
                 W = new_W
 
-                new_RD = RD * 1.2
-                apply_change(
-                    "R_D",
-                    RD,
-                    new_RD,
-                    f"Gain low: {gain_db:.2f} dB vs target {target_gain_db:.2f} dB. Increased R_D.",
-                )
-                RD = new_RD
+                vdd = constraints.get("supply_v", 1.8)
+                max_rd_from_headroom = 0.8 * vdd / max(I, 1e-12)
+                new_RD = min(RD * 1.15, max_rd_from_headroom)
+
+                if new_RD > RD:
+                    apply_change(
+                        "R_D",
+                        RD,
+                        new_RD,
+                        f"Gain low: {gain_db:.2f} dB vs target {target_gain_db:.2f} dB. Increased R_D within headroom limit.",
+                    )
+                    RD = new_RD
 
             elif gain_err_db < -1.0:
                 step = self._clamp_step(1.0 - min(0.3, (-gain_err_db) / 30.0))
@@ -241,6 +247,8 @@ class RefinementAgent(BaseAgent):
                     f"Gain high: {gain_db:.2f} dB vs target {target_gain_db:.2f} dB. Decreased W_m.",
                 )
                 W = new_W
+
+            
 
         if target_bw_hz is not None and bw_hz is not None:
             bw_ratio = bw_hz / target_bw_hz if target_bw_hz > 0 else 1.0
