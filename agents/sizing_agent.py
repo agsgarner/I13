@@ -23,6 +23,8 @@ class SizingAgent(BaseAgent):
 
         memory.write("sizing", state.get("sizing"))
         memory.write("sizing_report", report.__dict__)
+        memory.write("status", DesignStatus.SIZING_COMPLETE)
+        return state
 
         if report.success:
             memory.write("status", DesignStatus.SIZING_COMPLETE)

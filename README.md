@@ -2,18 +2,13 @@
 
 ## Overview
 
-This repository contains a modular, multi-agent framework for analog filter design.
+This repository is a multi-agent analog design demo flow. It takes a circuit goal, selects a topology, sizes a first-pass implementation, validates constraints, generates an ngspice netlist, runs simulation, and stores artifacts for presentation.
 
-The system demonstrates how structured AI agents can collaborate through shared memory to:
+The framework is designed for capstone-style demos where we want traceability and repeatable outputs more than full custom-IC signoff accuracy.
 
-- Interpret design specifications
-- Select circuit topologies
-- Size components
-- Validate constraints
-- Perform lightweight simulation
-- Log design state transitions
+## Flow
 
-The focus of this project is architectural structure, orchestration, and traceability
+`Specification -> TopologyAgent -> SizingAgent -> ConstraintAgent -> NetlistAgent -> SimulationAgent -> RefinementAgent`
 
 ---
 
@@ -36,12 +31,15 @@ The OrchestrationAgent coordinates execution and validation flow.
 
 ## Repository Structure
 
-- `agents/` — Independent design agents and workflow control
-- `memory/` — Shared state and history logging
-- `core/` — Structured design state and memory between agents
-- `main.py` — Entry point and design summary output
+- `agents/` - design agents and orchestration logic
+- `core/` - shared defaults, memory helpers, topology library, demo case catalog
+- `flow/` - lightweight workflow engine
+- `flow/design_flow.py` - orchestration graph, retry logic, and refinement loop transitions
+- `llm/` - OpenAI-backed and local stub LLM adapters
+- `main.py` - run one demo case
+- `demo_runner.py` - run a batch of demo cases
 
----
+## Running
 
 # LLM Customized for Analog Circuit Design
 
@@ -95,55 +93,85 @@ The OrchestrationAgent coordinates execution and validation flow.
 
 ## Example Use Case
 
-Input:
+```bash
+python3 main.py
+```
 
-> Design a lowpass filter with 1kHz cutoff
+List available demo cases:
 
-Output:
+```bash
+DESIGN_CASE=list python3 main.py
+```
 
-- Selected topology: RC lowpass
-- Computed component values
-- Constraint validation report
-- Estimated cutoff frequency
-- Final design status
+Run a specific case:
 
----
+```bash
+DESIGN_CASE=mirror python3 main.py
+DESIGN_CASE=opamp python3 main.py
+DESIGN_CASE=diff_pair python3 main.py
+SHOW_HISTORY=1 DESIGN_CASE=mirror python3 main.py
+```
 
-## Key Concepts
+Run a batch demo:
 
-### Shared Memory
+```bash
+DEMO_LIMIT=4 python3 demo_runner.py
+DESIGN_CASES=mirror,opamp,common_source,diff_pair python3 demo_runner.py
+```
 
-All agents communicate via a centralized memory object.  
-Each write operation is timestamped and stored in history.
+## OpenAI Fallback
 
-This enables:
+By default the project uses `LocalLLMStub`. To enable OpenAI-backed fallback:
 
-- Traceability
-- Debugging
-- Lifecycle inspection
-- Retry logic support
+```bash
+export USE_OPENAI=1
+export OPENAI_API_KEY=...
+export OPENAI_MODEL=gpt-4.1-mini
+python3 main.py
+```
 
----
+## Demo Circuit Catalog
 
-### Design Status Model
+The catalog includes:
 
-A structured design status enum tracks the current state of the pipeline:
+- `common_source`
+- `two_stage_common_source_res_load`
+- `common_drain`
+- `common_gate`
+- `rc`
+- `source_degenerated_amplifier`
+- `mirror`
+- `common_source_active_load`
+- `cascode_amp`
+- `diff_pair`
+- `diode_connected_amplifier`
+- `mos_buffer`
+- `nand2`
+- `opamp`
+- `sram6t`
+- `two_stage_opamp_single_ended`
+- `fully_diff_amp_cmfb`
+- `lc_oscillator`
+- `telescopic_cascode_opamp`
+- `bandgap_reference`
 
-- topology_selected
-- design_invalid
-- design_validated
-- simulation_complete
-- orchestration_failed
+Notes:
 
----
+- Strongest native template support today is for `rc`, `mirror`, `common_source`, `diff_pair`, `opamp`, and the `gm_stage` behavioral proxy family.
+- Some advanced catalog entries intentionally map to demo proxy models so the framework can still run end-to-end and generate plots in a live presentation.
 
-## Running the Project
+## Simulation Artifacts
 
+Each run writes under `artifacts/simulations/...` and may include:
 
-python main.py
+- `generated.sp`
+- `ngspice.log`
+- `ac_out.csv`, `tran_out.csv`, `dc_out.csv`
+- `ac_plot.svg`, `tran_plot.svg`, `dc_plot.svg`
 
+The plotting layer falls back to SVG generation if `matplotlib` is unavailable.
 
----
+## Demo Notes
 
 ## External LLM Backends
 
@@ -348,14 +376,11 @@ You can control sampling with:
 
 ## Project Goals
 
-- Demonstrate structured AI orchestration
-- Enforce constraint-aware validation
-- Model design lifecycle state transitions
-- Simulate an AI-assisted EDA workflow
+## Dataset
 
----
+This project references the Masala-CHAI SPICE netlist dataset, but the dataset itself is not included in this repository.
 
-## Future Extensions
+## Citation
 
 - Additional filter topologies
 - Optimization loops

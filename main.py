@@ -6,6 +6,9 @@ import argparse
 
 from core.shared_memory import SharedMemory
 
+from agents.design_status import DesignStatus
+from core.demo_catalog import get_demo_case, list_demo_cases
+from core.shared_memory import SharedMemory
 from llm.local_llm_stub import LocalLLMStub
 
 from agents.topology_agent import TopologyAgent
