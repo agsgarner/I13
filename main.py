@@ -33,7 +33,8 @@ def build_llm():
         try:
             from llm.qwen_llm import QwenLLM
 
-            llm = QwenLLM(model=os.getenv("QWEN_MODEL", "qwen-turbo"))
+            qwen_model = os.getenv("QWEN_MODEL", "qwen-turbo")
+            llm = QwenLLM(model=qwen_model)
             print("[LLM] Using Qwen backend.")
             return llm
         except Exception as exc:
@@ -153,6 +154,17 @@ def parse_args():
         description="Run the multi-agent analog design loop from terminal inputs."
     )
     parser.add_argument(
+        "--demo-case",
+        type=str,
+        default="",
+        help="Use a predefined case from core.demo_catalog (e.g., rc, cs_amp, mirror, diff_pair, opamp).",
+    )
+    parser.add_argument(
+        "--list-cases",
+        action="store_true",
+        help="List available demo cases and exit.",
+    )
+    parser.add_argument(
         "--spec",
         type=str,
         default="Design a lowpass filter with 1kHz cutoff",
@@ -177,23 +189,39 @@ def main():
     print_banner()
     args = parse_args()
 
+    if args.list_cases:
+        print("Available demo cases:")
+        for item in list_demo_cases():
+            print(f"- {item['key']}: {item['display_name']}")
+        return
+
     memory = SharedMemory()
 
-    memory.write(
-        "specification",
-        args.spec,
-    )
+    if args.demo_case:
+        case = get_demo_case(args.demo_case)
+        memory.write("specification", case["specification"])
+        memory.write("constraints", case["constraints"])
+        memory.write("case_metadata", {
+            "forced_topology": case.get("forced_topology"),
+            "case_key": case.get("case_key"),
+            "display_name": case.get("display_name"),
+        })
+    else:
+        memory.write(
+            "specification",
+            args.spec,
+        )
 
-    memory.write(
-        "constraints",
-        {
-            "circuit_type": args.circuit_type,
-            "target_fc_hz": float(args.target_fc),
-            "fixed_cap_f": 10e-9,
-            "vin_ac": 1.0,
-            "vin_step": 1.0,
-        }
-    )
+        memory.write(
+            "constraints",
+            {
+                "circuit_type": args.circuit_type,
+                "target_fc_hz": float(args.target_fc),
+                "fixed_cap_f": 10e-9,
+                "vin_ac": 1.0,
+                "vin_step": 1.0,
+            }
+        )
 
     llm = build_llm()
 

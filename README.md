@@ -249,27 +249,6 @@ Create a UTF-8 text file at:
 
 You can combine multiple text sources into that file.
 
-If your source data is in images (`.jpg`, `.jpeg`, `.png`), run OCR preprocessing first.
-
-### OCR Preprocessing (Images -> Text)
-
-OCR means "Optical Character Recognition": it reads text from images and converts it into machine-readable text.
-
-1. Put images in `data/images/`
-2. Run:
-
-```powershell
-python ocr_preprocess.py --input-dir data/images --output data/corpus.txt
-```
-
-Optional flags:
-
-```powershell
-python ocr_preprocess.py --input-dir data/images --output data/corpus.txt --lang en --gpu
-```
-
-This OCR pipeline uses EasyOCR and does not require a separate external OCR executable.
-
 ### 3) Train
 
 ```powershell
