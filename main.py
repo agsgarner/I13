@@ -1,96 +1,148 @@
 # I13/main.py
 
+import os
+
 import argparse
 
 from core.shared_memory import SharedMemory
 
-from llm.qwen_llm import QwenLLM
+from llm.local_llm_stub import LocalLLMStub
 
 from agents.topology_agent import TopologyAgent
 from agents.sizing_agent import SizingAgent
 from agents.constraints_agent import ConstraintAgent
+from agents.netlist_agent import NetlistAgent
 from agents.simulation_agent import SimulationAgent
 from agents.refinement_agent import RefinementAgent
 from agents.orchestration_agent import OrchestrationAgent
 
 
-# -------------------------------------------------------
-# Pretty Terminal Output
-# -------------------------------------------------------
+def build_llm():
+    """
+    Select a remote provider by env var, then fall back to the local stub so
+    the demo still runs reliably without API/network access.
+    """
+    provider = os.getenv("LLM_PROVIDER", "").strip().lower()
+    use_qwen = os.getenv("USE_QWEN", "0").strip() == "1"
+    use_openai = os.getenv("USE_OPENAI", "0").strip() == "1"
+
+    if provider == "qwen" or use_qwen:
+        try:
+            from llm.qwen_llm import QwenLLM
+
+            llm = QwenLLM(model=os.getenv("QWEN_MODEL", "qwen-turbo"))
+            print("[LLM] Using Qwen backend.")
+            return llm
+        except Exception as exc:
+            print(f"[LLM] Qwen unavailable, falling back to LocalLLMStub: {exc}")
+
+    if provider == "openai" or use_openai:
+        try:
+            from llm.openai_llm import OpenAILLM
+
+            llm = OpenAILLM(model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"))
+            print("[LLM] Using OpenAI backend.")
+            return llm
+        except Exception as exc:
+            print(f"[LLM] OpenAI unavailable, falling back to LocalLLMStub: {exc}")
+
+    print("[LLM] Using LocalLLMStub backend.")
+    return LocalLLMStub()
+
 
 def print_banner():
-    print("\n" + "=" * 70)
-    print("     MULTI-AGENT ANALOG CIRCUIT DESIGN SYSTEM")
-    print("=" * 70 + "\n")
+    print("\n" + "=" * 72)
+    print("        MULTI-AGENT ANALOG CIRCUIT DESIGN SYSTEM")
+    print("=" * 72 + "\n")
 
 
 def summarize_design(state):
-
-    print("\n" + "-" * 70)
+    print("\n" + "-" * 72)
     print("FINAL DESIGN SUMMARY")
-    print("-" * 70)
+    print("-" * 72)
 
-    # Specification
     print("\n[1] Specification")
     print("   ", state.get("specification"))
 
-    # Topology
-    print("\n[2] Topology Selection")
-    print("    Selected:", state.get("selected_topology"))
-    print("    LLM Confidence:", state.get("topology_confidence"))
+    print("\n[2] Topology")
+    print("   selected_topology:", state.get("selected_topology"))
+    print("   topology_confidence:", state.get("topology_confidence"))
+    print("   topology_reasoning:", state.get("topology_reasoning"))
 
-    # Sizing
-    print("\n[3] Sizing Parameters")
-    sizing = state.get("sizing") or {}
-    for k, v in sizing.items():
-        print(f"    {k}: {v}")
+    print("\n[3] Constraints")
+    for k, v in (state.get("constraints") or {}).items():
+        print(f"   {k}: {v}")
 
-    # Constraint Report
-    print("\n[4] Constraint Evaluation")
+    print("\n[4] Sizing")
+    for k, v in (state.get("sizing") or {}).items():
+        print(f"   {k}: {v}")
+
+    print("\n[5] Constraint Report")
     report = state.get("constraints_report") or {}
-    print("    Passed:", report.get("passed"))
-    print("    Completeness Score:", report.get("completeness_score"))
+    print("   passed:", report.get("passed"))
+    for issue in report.get("issues", []):
+        print("   issue:", issue)
+    for warning in report.get("warnings", []):
+        print("   warning:", warning)
 
-    if report.get("issues"):
-        print("    Issues:")
-        for issue in report.get("issues"):
-            print("       -", issue)
+    print("\n[6] Netlist")
+    print("   source:", state.get("netlist_source"))
+    netlist = state.get("netlist")
+    if netlist:
+        print(netlist)
 
-    if report.get("warnings"):
-        print("    Warnings:")
-        for warn in report.get("warnings"):
-            print("       -", warn)
-
-    # Simulation Results
-    print("\n[5] Simulation Results")
+    print("\n[7] Simulation Results")
     sim = state.get("simulation_results") or {}
+    ordered_keys = [
+        "returncode",
+        "saved_netlist_path",
+        "artifact_dir",
+        "ac_csv",
+        "ac_plot",
+        "ac_points",
+        "tran_in_csv",
+        "tran_out_csv",
+        "tran_plot",
+        "tran_points",
+        "fc_hz_from_ac",
+        "fc_hz_formula",
+        "fc_hz",
+        "parser_warning",
+        "ngspice_path",
+    ]
+    shown = set()
+    for k in ordered_keys:
+        if k in sim:
+            print(f"   {k}: {sim[k]}")
+            shown.add(k)
+
     for k, v in sim.items():
-        print(f"    {k}: {v}")
+        if k not in shown and k not in ("stdout", "stderr", "ac_preview", "tran_preview"):
+            print(f"   {k}: {v}")
 
-    # Refinement
-    print("\n[6] Refinement Analysis")
-    refinement_issues = state.get("refinement_issues") or []
-    if refinement_issues:
-        print("    Issues Identified:")
-        for issue in refinement_issues:
-            print("       -", issue)
-    else:
-        print("    No refinement issues detected.")
+    if sim.get("ac_preview"):
+        print("   ac_preview:")
+        for line in sim["ac_preview"]:
+            print("      ", line)
 
-    # History
-    print("\n[7] Execution History")
-    history = state.get("history") or []
-    print("    Total Events:", len(history))
+    if sim.get("tran_preview"):
+        print("   tran_preview:")
+        for line in sim["tran_preview"]:
+            print("      ", line)
 
-    print("\n    Last 5 Events:")
-    for event in history[-5:]:
-        print("       -", event)
+    print("\n[8] Refinement Report")
+    refinement = state.get("refinement_report") or {}
+    print("   changed:", refinement.get("changed"))
+    for note in refinement.get("notes", []):
+        print("   note:", note)
 
-    # Final Status
-    print("\n[8] Final System Status")
-    print("    ", state.get("status"))
+    print("\n[9] Final Status")
+    print("   ", state.get("status"))
 
-    print("\n" + "-" * 70 + "\n")
+    print("\n[10] Iteration Count")
+    print("   ", state.get("iteration"))
+
+    print("\n" + "-" * 72 + "\n")
 
 
 def parse_args():
@@ -115,79 +167,55 @@ def parse_args():
         default=1000.0,
         help="Target cutoff frequency in Hz.",
     )
-    parser.add_argument(
-        "--llm-model",
-        type=str,
-        default="Qwen/Qwen2.5-1.5B-Instruct",
-        help="Pretrained Qwen model id to use for topology selection.",
-    )
-    parser.add_argument(
-        "--llm-max-new-tokens",
-        type=int,
-        default=96,
-        help="Maximum generated tokens for each LLM call.",
-    )
-    parser.add_argument(
-        "--llm-temperature",
-        type=float,
-        default=0.2,
-        help="Sampling temperature for Qwen generation.",
-    )
     return parser.parse_args()
 
 
-# -------------------------------------------------------
-# Main Entry
-# -------------------------------------------------------
-
 def main():
+    print_banner()
     args = parse_args()
 
-    print_banner()
-
-    # Initialize memory
     memory = SharedMemory()
 
-    # Specification and constraints passed from CLI.
-    memory.write("specification", args.spec)
-
-    memory.write("constraints", {
-        "circuit_type": args.circuit_type,
-        "target_fc_hz": args.target_fc
-    })
-
-    # Initialize LLM
-    llm = QwenLLM(
-        model_name=args.llm_model,
-        max_new_tokens=args.llm_max_new_tokens,
-        temperature=args.llm_temperature,
+    memory.write(
+        "specification",
+        args.spec,
     )
 
-    # Initialize agents
-    topology_agent = TopologyAgent(llm)
+    memory.write(
+        "constraints",
+        {
+            "circuit_type": args.circuit_type,
+            "target_fc_hz": float(args.target_fc),
+            "fixed_cap_f": 10e-9,
+            "vin_ac": 1.0,
+            "vin_step": 1.0,
+        }
+    )
+
+    llm = build_llm()
+
+    topology_agent = TopologyAgent(llm=llm)
     sizing_agent = SizingAgent()
     constraint_agent = ConstraintAgent()
+    netlist_agent = NetlistAgent(llm=llm)
     simulation_agent = SimulationAgent()
-    refinement_agent = RefinementAgent(llm)
+    refinement_agent = RefinementAgent(llm=llm)
 
-    # Orchestrator
     orchestrator = OrchestrationAgent(
-        memory,
-        topology_agent,
-        sizing_agent,
-        constraint_agent,
-        simulation_agent,
-        refinement_agent
+        memory=memory,
+        topology_agent=topology_agent,
+        sizing_agent=sizing_agent,
+        constraint_agent=constraint_agent,
+        netlist_agent=netlist_agent,
+        simulation_agent=simulation_agent,
+        refinement_agent=refinement_agent,
+        max_iterations=3,
     )
 
-    print("Starting autonomous design loop...\n")
-
-    # Run system
+    print("Starting autonomous design workflow...\n")
     final_state = orchestrator.run()
+    print("Workflow complete.\n")
 
-    print("\nDesign loop complete.")
-
-    # Print detailed results
     summarize_design(final_state)
 
 
