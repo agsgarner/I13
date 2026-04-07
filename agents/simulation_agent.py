@@ -1,5 +1,6 @@
 # I13/agents/simulation_agent.py
 
+import json
 import math
 import os
 import re
@@ -9,6 +10,7 @@ import tempfile
 from html import escape
 from datetime import datetime
 from core.analog_defaults import ANALOG_DEFAULTS
+from core.demo_catalog import slugify_label
 
 from agents.base_agent import BaseAgent
 from agents.design_status import DesignStatus
@@ -53,6 +55,22 @@ class SimulationAgent(BaseAgent):
         run_id = self._build_run_id(memory, topology)
         base_dir = os.path.join("artifacts", "simulations", run_id)
         os.makedirs(base_dir, exist_ok=True)
+        case_meta = memory.read("case_metadata") or {}
+        simulation_plan = case_meta.get("simulation_plan") or {}
+        manifest = {
+            "case_key": case_meta.get("case_key"),
+            "display_name": case_meta.get("display_name"),
+            "artifact_label": case_meta.get("artifact_label"),
+            "topology": topology,
+            "attempt": int(memory.read("iteration", 0)) + 1,
+            "analyses": simulation_plan.get("analyses", []),
+            "intent": simulation_plan.get("intent"),
+            "primary_metrics": simulation_plan.get("primary_metrics", []),
+        }
+        self._safe_write_text(
+            os.path.join(base_dir, "run_manifest.json"),
+            self._to_json(manifest),
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             netlist_path = os.path.join(tmpdir, "generated.sp")
@@ -77,6 +95,8 @@ class SimulationAgent(BaseAgent):
                 "saved_netlist_path": saved_netlist_path,
                 "artifact_dir": base_dir,
                 "ngspice_path": self.ngspice_path,
+                "analyses": simulation_plan.get("analyses", []),
+                "intent": simulation_plan.get("intent"),
             }
 
             self._safe_write_text(os.path.join(base_dir, "stdout.txt"), result.stdout or "")
@@ -317,10 +337,17 @@ class SimulationAgent(BaseAgent):
         return None
 
     def _build_run_id(self, memory: SharedMemory, topology: str):
+        case_meta = memory.read("case_metadata") or {}
         attempt = int(memory.read("iteration", 0)) + 1
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        topology_slug = (topology or "unknown").replace(" ", "_")
-        return f"{timestamp}_{topology_slug}_attempt_{attempt:02d}"
+        topology_slug = slugify_label(topology or "unknown")
+        case_slug = slugify_label(case_meta.get("artifact_label") or case_meta.get("case_key") or "case")
+        analyses = (case_meta.get("simulation_plan") or {}).get("analyses") or []
+        analysis_slug = "-".join(analyses) if analyses else "sim"
+        return os.path.join(
+            case_slug,
+            f"{case_slug}__{topology_slug}__{analysis_slug}__attempt-{attempt:02d}__{timestamp}",
+        )
 
     def _get_pyplot(self):
         try:
@@ -339,6 +366,9 @@ class SimulationAgent(BaseAgent):
     def _safe_write_text(self, path, text):
         with open(path, "w") as f:
             f.write(text)
+
+    def _to_json(self, value):
+        return json.dumps(value, indent=2, sort_keys=True)
 
     def _preview_file(self, path, max_lines=5):
         preview = []

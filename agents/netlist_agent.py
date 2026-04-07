@@ -6,6 +6,13 @@ from core.shared_memory import SharedMemory
 
 
 class NetlistAgent(BaseAgent):
+    ANALYSIS_TOKENS = {
+        "op": ["\nop", "\n                op"],
+        "ac": ["\n                ac ", "\nac "],
+        "dc": ["\n                dc ", "\ndc "],
+        "tran": ["\n                tran ", "\ntran "],
+    }
+
     TEMPLATE_TOPOLOGIES = {
         "rc_lowpass",
         "common_source_res_load",
@@ -48,10 +55,35 @@ class NetlistAgent(BaseAgent):
             memory.write("netlist_raw", netlist)
             return None
 
+        plan_error = self._validate_netlist_against_plan(memory, netlist)
+        if plan_error:
+            memory.write("status", DesignStatus.NETLIST_FAILED)
+            memory.write("netlist_error", plan_error)
+            memory.write("netlist_raw", netlist)
+            return None
+
         memory.write("netlist", netlist)
         memory.write("netlist_source", source)
         memory.write("status", DesignStatus.NETLIST_GENERATED)
         return netlist
+
+    def _validate_netlist_against_plan(self, memory: SharedMemory, netlist: str):
+        plan = ((memory.read("case_metadata") or {}).get("simulation_plan") or {})
+        analyses = plan.get("analyses") or []
+        lower_netlist = netlist.lower()
+
+        missing = []
+        for analysis in analyses:
+            tokens = self.ANALYSIS_TOKENS.get(analysis, [])
+            if tokens and not any(token in lower_netlist for token in tokens):
+                missing.append(analysis)
+
+        if missing:
+            return (
+                "Generated netlist does not include the planned analyses: "
+                + ", ".join(missing)
+            )
+        return None
 
     def _build_template_netlist(self, topology, sizing, constraints):
         if topology == "rc_lowpass":

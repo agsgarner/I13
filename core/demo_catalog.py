@@ -1,3 +1,34 @@
+import re
+
+from core.topology_library import TOPOLOGY_LIBRARY
+
+
+def slugify_label(value: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower())
+    return text.strip("-") or "unnamed"
+
+
+def describe_case_for_artifacts(case: dict) -> str:
+    case_key = case.get("case_key") or case.get("key") or "case"
+    display_name = case.get("display_name") or case_key
+    return f"{case_key}_{slugify_label(display_name)}"
+
+
+def build_case_simulation_plan(case: dict) -> dict:
+    topology_key = case.get("forced_topology")
+    topology_meta = TOPOLOGY_LIBRARY.get(topology_key, {})
+    base_plan = dict(topology_meta.get("simulation_plan") or {})
+    if case.get("simulation_plan"):
+        base_plan.update(case["simulation_plan"])
+    if "analyses" in base_plan:
+        base_plan["analyses"] = list(base_plan["analyses"])
+    if "primary_metrics" in base_plan:
+        base_plan["primary_metrics"] = list(base_plan["primary_metrics"])
+    if "required_constraint_targets" in base_plan:
+        base_plan["required_constraint_targets"] = list(base_plan["required_constraint_targets"])
+    return base_plan
+
+
 DEMO_CASES = {
     "rc": {
         "display_name": "Single-Stage RC Low-Pass Filter",
@@ -338,6 +369,8 @@ def get_demo_case(case_name: str):
         raise KeyError(f"Unknown DESIGN_CASE '{case_name}'. Available cases: {available}")
     case = dict(DEMO_CASES[resolved])
     case["case_key"] = resolved
+    case["artifact_label"] = describe_case_for_artifacts(case)
+    case["simulation_plan"] = build_case_simulation_plan(case)
     return case
 
 
@@ -348,6 +381,8 @@ def list_demo_cases():
             "display_name": value.get("display_name", key),
             "forced_topology": value.get("forced_topology"),
             "demo_model": value.get("demo_model", "native"),
+            "artifact_label": describe_case_for_artifacts({"key": key, **value}),
+            "simulation_plan": build_case_simulation_plan({"forced_topology": value.get("forced_topology"), **value}),
         }
         for key, value in sorted(DEMO_CASES.items())
     ]

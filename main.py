@@ -108,6 +108,7 @@ def format_final_report(case_name: str, final_state: dict) -> str:
     refinement = final_state.get("refinement_report") or {}
     constraints_report = final_state.get("constraints_report") or {}
     case_meta = final_state.get("case_metadata") or {}
+    simulation_plan = case_meta.get("simulation_plan") or {}
 
     lines = [
         "",
@@ -127,6 +128,9 @@ def format_final_report(case_name: str, final_state: dict) -> str:
     artifact_dir = sim.get("artifact_dir")
     if artifact_dir:
         lines.append(f"Latest artifact dir: {artifact_dir}")
+    if simulation_plan.get("analyses"):
+        lines.append(f"Simulation intent: {simulation_plan.get('intent', 'n/a')}")
+        lines.append("Planned analyses: " + ", ".join(simulation_plan["analyses"]))
 
     metric_rows = _format_metrics_block(sim)
     if metric_rows:
@@ -196,6 +200,8 @@ def run_case(case_name: str):
             "display_name": case.get("display_name"),
             "forced_topology": case.get("forced_topology"),
             "demo_model": case.get("demo_model", "native"),
+            "artifact_label": case.get("artifact_label"),
+            "simulation_plan": case.get("simulation_plan", {}),
         },
     )
 

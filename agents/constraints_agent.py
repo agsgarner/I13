@@ -21,6 +21,14 @@ class ConstraintReport:
 
 
 class ConstraintAgent(BaseAgent):
+    ANALYSIS_TARGET_KEYS = {
+        "ac": {"target_fc_hz", "target_gain_db", "target_bw_hz", "target_ugbw_hz", "phase_margin_deg"},
+        "dc": {"target_iout_a", "compliance_v", "target_vref_v"},
+        "tran": {"target_slew_v_per_us", "target_osc_hz"},
+        "op": {"power_limit_mw", "supply_v", "target_gm_s"},
+    }
+    SIMULATION_TARGET_KEYS = set().union(*ANALYSIS_TARGET_KEYS.values())
+
     REQUIRED_CONSTRAINT_KEYS_BY_TEMPLATE = {
         "filter_rc": ["target_fc_hz"],
         "amplifier_single_stage": ["supply_v", "target_gain_db", "target_bw_hz", "power_limit_mw"],
@@ -114,6 +122,11 @@ class ConstraintAgent(BaseAgent):
             return state, report
 
         template = topology_meta["constraint_template"]
+        simulation_plan = (
+            (state.get("case_metadata") or {}).get("simulation_plan")
+            or topology_meta.get("simulation_plan")
+            or {}
+        )
         required_constraints = self.REQUIRED_CONSTRAINT_KEYS_BY_TEMPLATE.get(template, [])
         required_sizing = self.REQUIRED_SIZING_KEYS_BY_TOPOLOGY.get(topology_key, [])
 
@@ -129,6 +142,31 @@ class ConstraintAgent(BaseAgent):
             val = constraints.get(key)
             if val is not None and val <= 0:
                 issues.append(f"Constraint '{key}' must be > 0")
+
+        required_targets = simulation_plan.get("required_constraint_targets") or []
+        for key in required_targets:
+            if constraints.get(key) is None:
+                issues.append(
+                    f"Simulation plan for '{topology_key}' requires constraint target '{key}'"
+                )
+
+        analyses = simulation_plan.get("analyses") or []
+        relevant_keys = set()
+        for analysis in analyses:
+            relevant_keys.update(self.ANALYSIS_TARGET_KEYS.get(analysis, set()))
+        irrelevant_targets = []
+        for key in constraints.keys():
+            if key not in self.SIMULATION_TARGET_KEYS:
+                continue
+            if key in required_constraints or key in required_targets:
+                continue
+            if relevant_keys and key not in relevant_keys:
+                irrelevant_targets.append(key)
+        if irrelevant_targets:
+            warnings.append(
+                "Constraint targets not exercised by the planned analyses: "
+                + ", ".join(sorted(irrelevant_targets))
+            )
 
         if topology_key == "rc_lowpass":
             R = sizing.get("R_ohm")

@@ -3,126 +3,252 @@ TOPOLOGY_LIBRARY = {
         "name": "Single-Stage RC Low-Pass Filter",
         "category": "filter",
         "constraint_template": "filter_rc",
-        "complexity": "low"
+        "complexity": "low",
+        "simulation_plan": {
+            "analyses": ["ac", "tran"],
+            "intent": "Verify cutoff frequency in AC and confirm step-settling behavior in transient.",
+            "primary_metrics": ["fc_hz"],
+            "required_constraint_targets": ["target_fc_hz"],
+        },
     },
     "current_mirror": {
         "name": "MOS Current Mirror",
         "category": "bias",
         "constraint_template": "bias_current_mirror",
-        "complexity": "low"
+        "complexity": "low",
+        "simulation_plan": {
+            "analyses": ["op", "dc"],
+            "intent": "Check bias current at the operating point and output-current compliance across a DC sweep.",
+            "primary_metrics": ["iout_a"],
+            "required_constraint_targets": ["target_iout_a", "compliance_v"],
+        },
     },
     "wilson_current_mirror": {
         "name": "Wilson Current Mirror",
         "category": "bias",
         "constraint_template": "bias_current_mirror_precision",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "dc"],
+            "intent": "Validate mirrored current accuracy and output compliance across a DC sweep.",
+            "primary_metrics": ["iout_a"],
+            "required_constraint_targets": ["target_iout_a"],
+        },
     },
     "cascode_current_mirror": {
         "name": "Cascode Current Mirror",
         "category": "bias",
         "constraint_template": "bias_current_mirror_high_output_resistance",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "dc"],
+            "intent": "Validate mirrored current and confirm high output resistance over a DC compliance sweep.",
+            "primary_metrics": ["iout_a"],
+            "required_constraint_targets": ["target_iout_a"],
+        },
     },
     "common_source_res_load": {
         "name": "Common-Source Amplifier with Resistive Load",
         "category": "amplifier",
         "constraint_template": "amplifier_single_stage",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "ac"],
+            "intent": "Check bias point first, then verify small-signal gain and bandwidth.",
+            "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
+            "required_constraint_targets": ["target_gain_db", "target_bw_hz", "power_limit_mw"],
+        },
     },
     "diff_pair": {
         "name": "MOS Differential Pair",
         "category": "amplifier",
         "constraint_template": "amplifier_differential",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "ac"],
+            "intent": "Check differential pair biasing and verify differential gain response.",
+            "primary_metrics": ["gain_db", "bandwidth_hz"],
+            "required_constraint_targets": ["power_limit_mw"],
+        },
     },
     "bjt_diff_pair": {
         "name": "BJT Differential Pair",
         "category": "amplifier",
         "constraint_template": "amplifier_differential_bjt",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "ac"],
+            "intent": "Check BJT biasing and confirm differential small-signal behavior.",
+            "primary_metrics": ["gain_db", "bandwidth_hz"],
+            "required_constraint_targets": ["tail_current_a", "collector_res_ohm"],
+        },
     },
     "gm_stage": {
         "name": "Transconductance Stage",
         "category": "analog_block",
         "constraint_template": "transconductor",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "ac", "tran"],
+            "intent": "Validate target transconductance and inspect both frequency response and step behavior.",
+            "primary_metrics": ["gain_db", "bandwidth_hz"],
+            "required_constraint_targets": ["target_gm_s"],
+        },
     },
     "common_drain": {
         "name": "Common-Drain Source Follower",
         "category": "amplifier",
         "constraint_template": "source_follower",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "ac", "tran"],
+            "intent": "Check source-follower biasing, bandwidth, and large-signal following behavior.",
+            "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
+            "required_constraint_targets": ["supply_v", "target_gm_s"],
+        },
     },
     "common_gate": {
         "name": "Common-Gate Amplifier",
         "category": "amplifier",
         "constraint_template": "common_gate_amp",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "ac", "tran"],
+            "intent": "Check bias headroom, then verify AC response and transient signal handling.",
+            "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
+            "required_constraint_targets": ["supply_v", "target_gm_s"],
+        },
     },
     "source_degenerated_cs": {
         "name": "Source-Degenerated Common-Source Amplifier",
         "category": "amplifier",
         "constraint_template": "amplifier_source_degenerated",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "ac"],
+            "intent": "Check linearized biasing and verify moderate gain with bandwidth control.",
+            "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
+            "required_constraint_targets": ["target_gain_db", "target_bw_hz", "power_limit_mw"],
+        },
     },
     "common_source_active_load": {
         "name": "Common-Source Amplifier with Active Load",
         "category": "amplifier",
         "constraint_template": "amplifier_active_load",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "ac"],
+            "intent": "Check active-load biasing and confirm achievable small-signal gain and bandwidth.",
+            "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
+            "required_constraint_targets": ["target_gain_db", "power_limit_mw"],
+        },
     },
     "diode_connected_stage": {
         "name": "Diode-Connected MOS Amplifier",
         "category": "amplifier",
         "constraint_template": "amplifier_active_load",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "ac"],
+            "intent": "Check diode-connected load biasing and confirm first-pass gain behavior.",
+            "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
+            "required_constraint_targets": ["target_gain_db", "power_limit_mw"],
+        },
     },
     "cascode_amplifier": {
         "name": "NMOS Cascode Amplifier",
         "category": "amplifier",
         "constraint_template": "amplifier_cascode",
-        "complexity": "high"
+        "complexity": "high",
+        "simulation_plan": {
+            "analyses": ["op", "ac"],
+            "intent": "Check cascode headroom and confirm gain improvement with AC response.",
+            "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
+            "required_constraint_targets": ["target_gain_db", "power_limit_mw"],
+        },
     },
     "nand2_cmos": {
         "name": "CMOS 2-Input NAND Gate",
         "category": "digital",
         "constraint_template": "digital_cmos_gate",
-        "complexity": "medium"
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["tran"],
+            "intent": "Verify logic behavior and timing transitions for representative input toggles.",
+            "primary_metrics": [],
+            "required_constraint_targets": ["supply_v"],
+        },
     },
     "sram6t_cell": {
         "name": "6T SRAM Cell",
         "category": "memory",
         "constraint_template": "memory_sram_cell",
-        "complexity": "high"
+        "complexity": "high",
+        "simulation_plan": {
+            "analyses": ["tran"],
+            "intent": "Verify write/read state behavior through transient storage-node trajectories.",
+            "primary_metrics": ["q_final_v", "qb_final_v", "write_ok"],
+            "required_constraint_targets": ["supply_v"],
+        },
     },
     "lc_oscillator_cross_coupled": {
         "name": "Cross-Coupled LC Oscillator",
         "category": "oscillator",
         "constraint_template": "oscillator_lc",
-        "complexity": "high"
+        "complexity": "high",
+        "simulation_plan": {
+            "analyses": ["tran"],
+            "intent": "Confirm startup and estimate oscillation frequency from transient tank behavior.",
+            "primary_metrics": ["oscillation_hz"],
+            "required_constraint_targets": ["target_osc_hz", "supply_v"],
+        },
     },
     "bandgap_reference_core": {
         "name": "Bandgap Reference Core",
         "category": "reference",
         "constraint_template": "reference_bandgap",
-        "complexity": "high"
+        "complexity": "high",
+        "simulation_plan": {
+            "analyses": ["op", "dc", "tran"],
+            "intent": "Check operating-point reference voltage, line regulation in DC, and settling in transient.",
+            "primary_metrics": ["vref_v"],
+            "required_constraint_targets": ["target_vref_v", "supply_v"],
+        },
     },
     "two_stage_miller": {
         "name": "Two-Stage Op-Amp with Miller Compensation",
         "category": "opamp",
         "constraint_template": "opamp_two_stage",
-        "complexity": "high"
+        "complexity": "high",
+        "simulation_plan": {
+            "analyses": ["op", "ac", "tran"],
+            "intent": "Check bias point, open-loop gain and bandwidth, then verify large-signal settling and slew behavior.",
+            "primary_metrics": ["gain_db", "bandwidth_hz"],
+            "required_constraint_targets": ["target_gain_db", "target_ugbw_hz", "phase_margin_deg", "power_limit_mw"],
+        },
     },
     "folded_cascode_opamp": {
         "name": "Folded Cascode Op-Amp",
         "category": "opamp",
         "constraint_template": "opamp_folded_cascode",
-        "complexity": "high"
+        "complexity": "high",
+        "simulation_plan": {
+            "analyses": ["op", "ac", "tran"],
+            "intent": "Check folded-cascode biasing and confirm gain, bandwidth, and transient behavior.",
+            "primary_metrics": ["gain_db", "bandwidth_hz"],
+            "required_constraint_targets": ["target_gain_db", "target_ugbw_hz"],
+        },
     },
     "comparator": {
         "name": "Differential Comparator",
         "category": "mixed_signal",
         "constraint_template": "comparator",
-        "complexity": "medium"
-    }
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["tran"],
+            "intent": "Verify decision behavior and switching response in transient.",
+            "primary_metrics": [],
+            "required_constraint_targets": ["supply_v"],
+        },
+    },
 }
