@@ -7,29 +7,43 @@ from core.topology_library import TOPOLOGY_LIBRARY
 
 
 class TopologyAgent(BaseAgent):
-    """
-    Uses LLM to select appropriate circuit topology
-    based on user specifications.
-    """
-
-    def run(self, memory: SharedMemory):
-
+    def run_agent(self, memory: SharedMemory):
         spec = memory.read("specification")
+        constraints = memory.read("constraints") or {}
 
-        if spec is None:
-            memory.write("status", DesignStatus.NO_SPEC)
-            return
+        if not spec:
+            memory.write("status", "topology_failed")
+            memory.write("topology_error", "Missing specification")
+            return None
 
-        # Create prompt for local LLM
+        topology_keys = list(TOPOLOGY_LIBRARY.keys())
+
         prompt = f"""
-        Select appropriate analog topology for:
-        {spec}
-        """
+You are selecting an analog circuit topology.
+
+Available topology keys:
+{topology_keys}
+
+Specification:
+{spec}
+
+Constraints:
+{constraints}
+
+Choose the single best topology key.
+Return JSON only in this exact schema:
+{{
+  "topology": "<one of the keys above>",
+  "confidence": <float from 0 to 1>,
+  "reasoning": "<brief explanation>"
+}}
+"""
 
         result = self.llm.generate(prompt)
-        
-        topology = result["topology"]
-        confidence = result["confidence"]
+
+        topology = result.get("topology")
+        confidence = result.get("confidence", 0.0)
+        reasoning = result.get("reasoning", "")
 
         if topology not in TOPOLOGY_LIBRARY:
             memory.write("status", DesignStatus.TOPOLOGY_UNKNOWN)
@@ -38,8 +52,10 @@ class TopologyAgent(BaseAgent):
             return
 
         memory.write("selected_topology", topology)
-        memory.write("constraint_template", TOPOLOGY_LIBRARY[topology]["constraint_template"])
-        memory.write("status", DesignStatus.TOPOLOGY_SELECTED)
+        memory.write("topology_metadata", TOPOLOGY_LIBRARY[topology])
         memory.write("topology_confidence", confidence)
-
+        memory.write("topology_reasoning", reasoning)
+        memory.write("status", DesignStatus.TOPOLOGY_SELECTED)
         memory.append_history("topology_selected", topology)
+        return result
+    

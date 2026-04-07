@@ -1,12 +1,12 @@
-# I13/agents/constraint_agent.py
+# I13/agents/constraints_agent.py
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import List
 
-from core.shared_memory import SharedMemory
-from core.topology_library import TOPOLOGY_LIBRARY
 from agents.base_agent import BaseAgent
 from agents.design_status import DesignStatus
+from core.shared_memory import SharedMemory
+from core.topology_library import TOPOLOGY_LIBRARY
 
 
 @dataclass
@@ -15,127 +15,107 @@ class ConstraintReport:
     issues: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     checked_topology: str = "unknown"
-    completeness_score: float = 0.0
     required_constraints: List[str] = field(default_factory=list)
     required_sizing: List[str] = field(default_factory=list)
+    constraint_template: str = "unknown"
 
 
 class ConstraintAgent(BaseAgent):
-
-    REQUIRED_CONSTRAINT_KEYS = {
-
+    REQUIRED_CONSTRAINT_KEYS_BY_TEMPLATE = {
         "filter_rc": ["target_fc_hz"],
-
-        "amplifier_single_stage": [
-            "supply_v",
-            "target_gain_db",
-            "target_bw_hz",
-            "power_limit_mw"
-        ],
-
-        "amplifier_two_stage": [
-            "supply_v",
-            "target_gain_db",
-            "target_ugbw_hz",
-            "phase_margin_deg",
-            "load_cap_f",
-            "power_limit_mw"
-        ],
-
+        "amplifier_single_stage": ["supply_v", "target_gain_db", "target_bw_hz", "power_limit_mw"],
+        "amplifier_differential": ["supply_v", "power_limit_mw"],
+        "amplifier_differential_bjt": ["tail_current_a", "collector_res_ohm"],
         "opamp_two_stage": [
-            "supply_v",
-            "target_gain_db",
-            "target_ugbw_hz",
-            "phase_margin_deg",
-            "cm_input_range",
-            "load_cap_f",
-            "power_limit_mw"
+            "supply_v", "target_gain_db", "target_ugbw_hz",
+            "phase_margin_deg", "load_cap_f", "power_limit_mw"
         ],
-
-        "bias_current_mirror": [
-            "supply_v",
-            "target_iout_a",
-            "accuracy_pct",
-            "compliance_v"
-        ]
+        "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"],
+        "transconductor": ["target_gm_s"],
+        "source_follower": ["supply_v"],
+        "common_gate_amp": ["supply_v"],
+        "amplifier_source_degenerated": ["supply_v", "target_gain_db", "target_bw_hz", "power_limit_mw"],
+        "amplifier_active_load": ["supply_v", "target_gain_db", "power_limit_mw"],
+        "amplifier_cascode": ["supply_v", "target_gain_db", "power_limit_mw"],
+        "digital_cmos_gate": ["supply_v"],
+        "memory_sram_cell": ["supply_v"],
+        "oscillator_lc": ["supply_v"],
+        "reference_bandgap": ["supply_v"],
+        "comparator": ["supply_v"],
     }
 
-    REQUIRED_SIZING_KEYS = {
-
-        "filter_rc": ["R_ohm", "C_f"],
-
-        "amplifier_single_stage": [
-            "W_m", "L_m", "R_D", "I_bias"
-        ],
-
-        "amplifier_two_stage": [
-            "W1", "L1", "W2", "L2", "I_bias", "Cc"
-        ],
-
-        "opamp_two_stage": [
-            "W1", "L1", "W2", "L2", "I_bias", "Cc"
-        ],
-
-        "bias_current_mirror": [
-            "W_ref", "L_ref", "W_out", "L_out", "I_ref"
-        ]
-    }
-
-    POSITIVE_CONSTRAINTS = {
-        "filter_rc": ["target_fc_hz"],
-        "amplifier_single_stage": ["supply_v", "target_bw_hz", "power_limit_mw"],
-        "amplifier_two_stage": ["supply_v", "target_ugbw_hz", "power_limit_mw"],
-        "opamp_two_stage": ["supply_v", "target_ugbw_hz", "power_limit_mw"],
-        "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"]
-    }
-
-    TOPOLOGY_SIZING_OVERRIDES = {
+    REQUIRED_SIZING_KEYS_BY_TOPOLOGY = {
         "rc_lowpass": ["R_ohm", "C_f"],
-        "common_source": ["W_m", "L_m", "R_D", "I_bias"],
         "common_source_res_load": ["W_m", "L_m", "R_D", "I_bias"],
         "diff_pair": ["W_in", "L_in", "W_tail", "L_tail", "I_tail", "R_load"],
+        "bjt_diff_pair": ["I_tail", "Ic_each", "R_C", "gm_each"],
         "current_mirror": ["W_ref", "L_ref", "W_out", "L_out", "I_ref"],
+        "two_stage_miller": ["Cc_f", "gm1_target_s", "I_stage1_a", "I_stage2_a"],
+        "gm_stage": ["gm_target_s", "I_bias_a", "W_m", "L_m"],
+        "common_drain": ["W_m", "L_m", "I_bias", "R_source", "Vbias"],
+        "common_gate": ["W_m", "L_m", "I_bias", "R_D", "Vbias"],
+        "source_degenerated_cs": ["W_m", "L_m", "R_D", "I_bias", "R_S"],
+        "common_source_active_load": ["W_n", "L_n", "W_p", "L_p", "I_bias"],
+        "diode_connected_stage": ["W_n", "L_n", "W_p", "L_p", "I_bias"],
+        "cascode_amplifier": ["W_in", "L_in", "W_cas", "L_cas", "R_D", "I_bias", "Vbias_cas"],
+        "nand2_cmos": ["W_n", "L_n", "W_p", "L_p", "C_load"],
+        "sram6t_cell": ["W_pullup", "L_pullup", "W_pulldown", "L_pulldown", "W_access", "L_access"],
+        "lc_oscillator_cross_coupled": ["W_pair", "L_pair", "L_tank", "C_tank", "I_tail"],
+        "bandgap_reference_core": ["I_core", "area_ratio", "R1_ohm", "R2_ohm"],
     }
 
-    def _resolve_template(self, topology_key: str, state: Dict[str, Any]) -> str:
-        template = state.get("constraint_template")
-        if template:
-            return template
-        if topology_key in TOPOLOGY_LIBRARY:
-            return TOPOLOGY_LIBRARY[topology_key]["constraint_template"]
-        return topology_key or "unknown"
+    POSITIVE_CONSTRAINTS_BY_TEMPLATE = {
+        "filter_rc": ["target_fc_hz"],
+        "amplifier_single_stage": ["supply_v", "target_bw_hz", "power_limit_mw"],
+        "amplifier_differential": ["supply_v", "power_limit_mw"],
+        "amplifier_differential_bjt": ["tail_current_a", "collector_res_ohm"],
+        "opamp_two_stage": ["supply_v", "target_ugbw_hz", "power_limit_mw"],
+        "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"],
+        "transconductor": ["target_gm_s"],
+        "source_follower": ["supply_v"],
+        "common_gate_amp": ["supply_v"],
+        "amplifier_source_degenerated": ["supply_v", "target_bw_hz", "power_limit_mw"],
+        "amplifier_active_load": ["supply_v", "power_limit_mw"],
+        "amplifier_cascode": ["supply_v", "power_limit_mw"],
+        "digital_cmos_gate": ["supply_v"],
+        "memory_sram_cell": ["supply_v"],
+        "oscillator_lc": ["supply_v"],
+        "reference_bandgap": ["supply_v"],
+        "comparator": ["supply_v"],
+    }
 
-    def _required_sizing(self, topology_key: str, template: str) -> List[str]:
-        if topology_key in self.TOPOLOGY_SIZING_OVERRIDES:
-            return self.TOPOLOGY_SIZING_OVERRIDES[topology_key]
-        return self.REQUIRED_SIZING_KEYS.get(template, [])
-
-    def run(self, memory: SharedMemory) -> Tuple[Dict[str, Any], ConstraintReport]:
-
-        issues: List[str] = []
-        warnings: List[str] = []
-
+    def run_agent(self, memory: SharedMemory):
         state = memory.get_full_state()
-        constraints = state.get("constraints")
+        constraints = state.get("constraints") or {}
         topology_key = state.get("selected_topology")
-        sizing = state.get("sizing")
+        sizing = state.get("sizing") or {}
 
-        if constraints is None:
-            issues.append("Missing constraints")
-        if topology_key is None:
+        issues = []
+        warnings = []
+
+        if not topology_key:
             issues.append("Missing selected topology")
-        if sizing is None:
+        if not constraints:
+            issues.append("Missing constraints")
+        if not sizing:
             issues.append("Missing sizing")
 
         if issues:
-            report = ConstraintReport(False, issues, warnings)
+            report = ConstraintReport(False, issues=issues, warnings=warnings)
             memory.write("constraints_report", report.__dict__)
             memory.write("status", DesignStatus.CONSTRAINTS_FAILED)
             return state, report
 
-        template = self._resolve_template(topology_key, state)
-        required_constraints = self.REQUIRED_CONSTRAINT_KEYS.get(template, [])
-        required_sizing = self._required_sizing(topology_key, template)
+        topology_meta = TOPOLOGY_LIBRARY.get(topology_key)
+        if topology_meta is None:
+            report = ConstraintReport(False, issues=[f"Unknown topology '{topology_key}'"])
+            memory.write("constraints_report", report.__dict__)
+            memory.write("status", DesignStatus.CONSTRAINTS_FAILED)
+            return state, report
+
+        template = topology_meta["constraint_template"]
+        required_constraints = self.REQUIRED_CONSTRAINT_KEYS_BY_TEMPLATE.get(template, [])
+        required_sizing = self.REQUIRED_SIZING_KEYS_BY_TOPOLOGY.get(topology_key, [])
 
         for key in required_constraints:
             if constraints.get(key) is None:
@@ -145,45 +125,101 @@ class ConstraintAgent(BaseAgent):
             if sizing.get(key) is None:
                 issues.append(f"Missing required sizing parameter '{key}'")
 
-        for key in self.POSITIVE_CONSTRAINTS.get(template, []):
+        for key in self.POSITIVE_CONSTRAINTS_BY_TEMPLATE.get(template, []):
             val = constraints.get(key)
             if val is not None and val <= 0:
                 issues.append(f"Constraint '{key}' must be > 0")
 
-        if template == "filter_rc":
-            fc = constraints.get("target_fc_hz")
+        if topology_key == "rc_lowpass":
             R = sizing.get("R_ohm")
             C = sizing.get("C_f")
-            if fc and R and C:
+            fc_target = constraints.get("target_fc_hz")
+            if R is not None and R <= 0:
+                issues.append("R_ohm must be > 0")
+            if C is not None and C <= 0:
+                issues.append("C_f must be > 0")
+            if R and C and fc_target:
                 fc_est = 1.0 / (2.0 * 3.141592653589793 * R * C)
-                rel_err = abs(fc_est - fc) / fc
-                if rel_err > 0.3:
-                    warnings.append("Cutoff frequency mismatch >30%")
+                rel_err = abs(fc_est - fc_target) / fc_target
+                if rel_err > 0.30:
+                    warnings.append("Initial RC sizing is more than 30% away from target_fc_hz")
 
-        if template == "amplifier_single_stage":
-            gain = constraints.get("target_gain_db")
-            if gain and gain > 45:
-                warnings.append("High gain may require multi-stage topology")
+        elif topology_key == "common_source_res_load":
+            VDD = constraints.get("supply_v")
+            I = sizing.get("I_bias")
+            RD = sizing.get("R_D")
+            Vov = sizing.get("Vov_target", constraints.get("target_vov_v", 0.2))
+
+            if VDD and I and RD:
+                vdrop = I * RD
+                vout_est = VDD - vdrop
+
+                if vdrop > 0.8 * VDD:
+                    warnings.append(
+                        f"Drain resistor drop consumes most of VDD; "
+                        f"vdrop={vdrop:.3f} V, VDD={VDD:.3f} V."
+                    )
+
+                if vout_est < Vov:
+                    issues.append(
+                        f"Estimated Vout too low to keep transistor in saturation: "
+                        f"Vout_est={vout_est:.3f} V, Vov={Vov:.3f} V."
+                    )
+
+        elif topology_key == "diff_pair":
+            I_tail = sizing.get("I_tail")
+            R_load = sizing.get("R_load")
+            if I_tail and R_load:
+                vdrop = (I_tail / 2.0) * R_load
+                supply_v = constraints.get("supply_v")
+                if supply_v and vdrop > 0.5 * supply_v:
+                    warnings.append("Load resistor drop may limit differential output swing.")
+
+            vid_max = constraints.get("max_input_diff_v")
+            if vid_max is not None and vid_max > 0.2:
+                warnings.append("Large differential input may push pair out of small-signal region.")
+
+        elif topology_key == "bjt_diff_pair":
+            gm = sizing.get("gm_each")
+            if gm is not None and gm < 1e-4:
+                warnings.append("BJT differential pair gm is low; gain may be limited.")
+
+        elif topology_key == "current_mirror":
+            compliance_v = constraints.get("compliance_v")
+            vov = sizing.get("Vov_target", 0.2)
+            if compliance_v is not None and compliance_v < vov:
+                issues.append("Compliance voltage too low for desired mirror overdrive.")
+
+            ratio = sizing.get("mirror_ratio", 1.0)
+            if ratio > 20:
+                warnings.append("Large mirror ratio may be sensitive to mismatch.")
+
+        elif topology_key == "two_stage_miller":
+            cc = sizing.get("Cc_f")
+            cl = constraints.get("load_cap_f")
+            pm = constraints.get("phase_margin_deg")
+            if cc and cl and cc < 0.1 * cl:
+                warnings.append("Compensation capacitor may be too small relative to load capacitance.")
+            if pm is not None and pm < 50:
+                warnings.append("Requested phase margin is low for a stable design.")
+
+        elif topology_key == "bandgap_reference_core":
+            ratio = sizing.get("R2_ohm", 0.0) / max(sizing.get("R1_ohm", 1.0), 1e-30)
+            if ratio < 5 or ratio > 20:
+                warnings.append("Bandgap resistor ratio is outside the usual first-pass range.")
 
         passed = len(issues) == 0
-        completeness = (
-            sum(1 for k in required_constraints if constraints.get(k) is not None)
-            / len(required_constraints)
-            if required_constraints else 1.0
-        )
 
         report = ConstraintReport(
             passed=passed,
             issues=issues,
             warnings=warnings,
             checked_topology=topology_key,
-            completeness_score=completeness,
             required_constraints=required_constraints,
             required_sizing=required_sizing,
+            constraint_template=template,
         )
 
         memory.write("constraints_report", report.__dict__)
         memory.write("status", DesignStatus.CONSTRAINTS_OK if passed else DesignStatus.CONSTRAINTS_FAILED)
-
         return state, report
-    

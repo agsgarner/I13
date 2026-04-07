@@ -1,7 +1,9 @@
-# SharedMemory.c
-# I13/core
+# I13/core/shared_memory.py
 
 from datetime import datetime
+from copy import deepcopy
+
+from agents.design_status import DesignStatus
 
 
 class SharedMemory:
@@ -9,40 +11,63 @@ class SharedMemory:
         self.state = {
             "specification": None,
             "selected_topology": None,
-            "topology_confidence": None,
             "constraint_template": None,
+            "topology_metadata": None,
             "constraints": None,
             "sizing": None,
             "sizing_report": None,
             "netlist": None,
-            "constraints_report": None,
-            "simulation_data": None,
             "simulation_results": None,
+            "constraints_report": None,
             "refinement_report": None,
-            "status": "initialized",
+            "topology_confidence": None,
+            "status": DesignStatus.INITIALIZED,
+            "iteration": 0,
             "history": []
         }
 
     def write(self, key, value):
         self.state[key] = value
-        self.append_history("write", {key: value})
+        self.append_history("write", {key: deepcopy(value)})
 
-    def read(self, key):
-        return self.state.get(key)
+    def read(self, key, default=None):
+        return self.state.get(key, default)
+
+    def update(self, data: dict):
+        for key, value in data.items():
+            self.write(key, value)
 
     def append_history(self, event, data):
         self.state["history"].append({
             "timestamp": datetime.utcnow().isoformat(),
             "event": event,
-            "data": data
+            "data": deepcopy(data)
         })
 
+    def increment_iteration(self):
+        self.state["iteration"] += 1
+        self.append_history("iteration_incremented", self.state["iteration"])
+
     def get_full_state(self):
-        return self.state
+        return deepcopy(self.state)
 
     def load_state(self, data, overwrite=True):
         if not isinstance(data, dict):
             raise ValueError("State must be a dict")
+
         for key, value in data.items():
             if overwrite or key not in self.state:
-                self.state[key] = value
+                self.state[key] = deepcopy(value)
+
+        self.append_history(
+            "state_loaded",
+            {
+                "overwrite": bool(overwrite),
+                "keys": list(data.keys()),
+            },
+        )
+
+    def get_recent_history(self, count=10):
+        count = max(0, int(count))
+        return deepcopy(self.state["history"][-count:])
+    

@@ -2,8 +2,13 @@
 
 from agents.base_agent import BaseAgent
 from agents.design_status import DesignStatus
-from agents.sizingagent import SizingAgent as SizingLogic, SizingReport
 from core.shared_memory import SharedMemory
+
+
+@dataclass
+class SizingReport:
+    success: bool
+    notes: list = field(default_factory=list)
 
 
 class SizingAgent(BaseAgent):
