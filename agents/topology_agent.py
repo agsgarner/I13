@@ -62,11 +62,51 @@ class TopologyAgent(BaseAgent):
 
     def _rule_based_topology(self, spec: str, constraints: dict):
         conf, reasons = self._score_match([
+            (
+                "band-pass" in spec
+                or "band pass" in spec
+                or constraints.get("target_center_hz") is not None,
+                0.50,
+                "band-pass wording or center-frequency target",
+            ),
+            (constraints.get("target_bw_hz") is not None, 0.20, "target_bw_hz present"),
+            ("rlc" in spec, 0.15, "rlc wording"),
+        ])
+        if conf >= 0.50:
+            return ("rlc_bandpass_2nd_order", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            (
+                "high-pass" in spec
+                or "high pass" in spec
+                or "ac-coupled" in spec
+                or "ac coupled" in spec,
+                0.45,
+                "high-pass wording",
+            ),
+            ("rlc" in spec, 0.15, "rlc wording"),
+            (constraints.get("target_fc_hz") is not None, 0.15, "target_fc_hz present"),
+        ])
+        if conf >= 0.50:
+            return ("rlc_highpass_2nd_order", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            (
+                "butterworth" in spec
+                or "bessel" in spec
+                or "chebyshev" in spec
+                or constraints.get("response_family") is not None,
+                0.35,
+                "filter response-family wording",
+            ),
             ("low-pass" in spec or "low pass" in spec or "filter" in spec, 0.45, "filter wording"),
             ("cutoff" in spec, 0.20, "cutoff wording"),
             (constraints.get("target_fc_hz") is not None, 0.20, "target_fc_hz present"),
+            ("rlc" in spec, 0.15, "rlc wording"),
         ])
         if conf >= 0.50:
+            if "rlc" in spec or constraints.get("response_family") is not None:
+                return ("rlc_lowpass_2nd_order", conf, f"Matched by: {', '.join(reasons)}")
             return ("rc_lowpass", conf, f"Matched by: {', '.join(reasons)}")
 
         conf, reasons = self._score_match([
@@ -219,7 +259,11 @@ class TopologyAgent(BaseAgent):
     
     def _deterministic_fallback(self, constraints: dict, spec: str):
         if constraints.get("target_fc_hz") is not None:
+            if constraints.get("response_family") is not None:
+                return ("rlc_lowpass_2nd_order", 0.55, "Deterministic fallback from target_fc_hz with response family.")
             return ("rc_lowpass", 0.55, "Deterministic fallback from target_fc_hz.")
+        if constraints.get("target_center_hz") is not None and constraints.get("target_bw_hz") is not None:
+            return ("rlc_bandpass_2nd_order", 0.55, "Deterministic fallback from center frequency and bandwidth targets.")
         if constraints.get("target_iout_a") is not None:
             return ("current_mirror", 0.55, "Deterministic fallback from target_iout_a.")
         if constraints.get("target_ugbw_hz") is not None:

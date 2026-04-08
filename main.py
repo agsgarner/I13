@@ -1,6 +1,5 @@
-# I13/main.py
-
 import os
+import json
 
 from agents.design_status import DesignStatus
 from core.demo_catalog import get_demo_case, list_demo_cases
@@ -67,9 +66,15 @@ def _format_metrics_block(sim: dict):
     rows = []
     for label, key, unit in (
         ("Gain", "gain_db", " dB"),
+        ("PeakGain", "peak_gain_db", " dB"),
         ("BW", "bandwidth_hz", " Hz"),
         ("Cutoff", "fc_hz", " Hz"),
+        ("Center", "center_hz", " Hz"),
+        ("Q", "q_factor", ""),
+        ("Damping", "damping_ratio", ""),
+        ("Rolloff", "rolloff_db_per_dec", " dB/dec"),
         ("Power", "power_mw", " mW"),
+        ("Pmargin", "power_margin_mw", " mW"),
         ("Iout", "iout_a", " A"),
         ("Vref", "vref_v", " V"),
         ("Fosc", "oscillation_hz", " Hz"),
@@ -80,6 +85,8 @@ def _format_metrics_block(sim: dict):
             rows.append(f"  {label:<8} {_fmt_value(sim.get(key), unit)}")
     if sim.get("write_ok") is not None:
         rows.append(f"  {'SRAM':<8} {'WRITE_OK' if sim.get('write_ok') else 'WRITE_FAIL'}")
+    if sim.get("power_limit_ok") is not None:
+        rows.append(f"  {'Plimit':<8} {'PASS' if sim.get('power_limit_ok') else 'FAIL'}")
     return rows
 
 
@@ -136,6 +143,8 @@ def format_final_report(case_name: str, final_state: dict) -> str:
     if metric_rows:
         lines.append("Metrics:")
         lines.extend(metric_rows)
+    if sim.get("response_family"):
+        lines.append(f"Response family: {sim.get('response_family')}")
 
     plots = []
     for key in ("ac_plot", "tran_plot", "dc_plot"):
@@ -171,6 +180,62 @@ def format_final_report(case_name: str, final_state: dict) -> str:
         lines.extend(_format_history_tail(final_state))
 
     return "\n".join(lines)
+
+
+def _artifact_summary(case_name: str, final_state: dict) -> dict:
+    sim = final_state.get("simulation_results") or {}
+    constraints = final_state.get("constraints") or {}
+    case_meta = final_state.get("case_metadata") or {}
+    return {
+        "case": case_name,
+        "display_name": case_meta.get("display_name"),
+        "topology": final_state.get("selected_topology"),
+        "status": final_state.get("status"),
+        "simulation_intent": (case_meta.get("simulation_plan") or {}).get("intent"),
+        "analyses": sim.get("analyses") or (case_meta.get("simulation_plan") or {}).get("analyses", []),
+        "targets": {
+            "gain_db": constraints.get("target_gain_db"),
+            "bandwidth_hz": constraints.get("target_bw_hz"),
+            "cutoff_hz": constraints.get("target_fc_hz"),
+            "center_hz": constraints.get("target_center_hz"),
+            "power_limit_mw": constraints.get("power_limit_mw"),
+            "oscillation_hz": constraints.get("target_oscillation_hz"),
+        },
+        "measured": {
+            "gain_db": sim.get("gain_db"),
+            "bandwidth_hz": sim.get("bandwidth_hz"),
+            "cutoff_hz": sim.get("fc_hz"),
+            "center_hz": sim.get("center_hz"),
+            "power_mw": sim.get("power_mw"),
+            "power_margin_mw": sim.get("power_margin_mw"),
+            "oscillation_hz": sim.get("oscillation_hz"),
+        },
+        "checks": {
+            "power_limit_ok": sim.get("power_limit_ok"),
+            "write_ok": sim.get("write_ok"),
+        },
+        "artifacts": {
+            "ac_plot": sim.get("ac_plot"),
+            "tran_plot": sim.get("tran_plot"),
+            "dc_plot": sim.get("dc_plot"),
+            "saved_netlist_path": sim.get("saved_netlist_path"),
+            "log_path": sim.get("log_path"),
+        },
+    }
+
+
+def _write_artifact_report(case_name: str, final_state: dict) -> None:
+    sim = final_state.get("simulation_results") or {}
+    artifact_dir = sim.get("artifact_dir")
+    if not artifact_dir:
+        return
+
+    os.makedirs(artifact_dir, exist_ok=True)
+    report_text = format_final_report(case_name, final_state) + "\n"
+    with open(os.path.join(artifact_dir, "final_report.txt"), "w") as f:
+        f.write(report_text)
+    with open(os.path.join(artifact_dir, "metrics_summary.json"), "w") as f:
+        json.dump(_artifact_summary(case_name, final_state), f, indent=2)
 
 
 def main():
@@ -226,7 +291,9 @@ def run_case(case_name: str):
     )
 
     print(f"Running case: {case_name} -> {case.get('display_name')}")
-    return orchestrator.run()
+    final_state = orchestrator.run()
+    _write_artifact_report(case_name, final_state)
+    return final_state
 
 
 if __name__ == "__main__":

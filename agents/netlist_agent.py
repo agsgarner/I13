@@ -15,6 +15,9 @@ class NetlistAgent(BaseAgent):
 
     TEMPLATE_TOPOLOGIES = {
         "rc_lowpass",
+        "rlc_lowpass_2nd_order",
+        "rlc_highpass_2nd_order",
+        "rlc_bandpass_2nd_order",
         "common_source_res_load",
         "current_mirror",
         "diff_pair",
@@ -36,6 +39,7 @@ class NetlistAgent(BaseAgent):
         topology = memory.read("selected_topology")
         sizing = memory.read("sizing") or {}
         constraints = memory.read("constraints") or {}
+        case_meta = memory.read("case_metadata") or {}
 
         if not topology or not sizing:
             memory.write("status", DesignStatus.NETLIST_FAILED)
@@ -43,7 +47,7 @@ class NetlistAgent(BaseAgent):
             return None
 
         if topology in self.TEMPLATE_TOPOLOGIES:
-            netlist = self._build_template_netlist(topology, sizing, constraints)
+            netlist = self._build_template_netlist(topology, sizing, constraints, case_meta)
             source = "template"
         else:
             netlist = self._build_llm_netlist(topology, sizing, constraints)
@@ -85,7 +89,8 @@ class NetlistAgent(BaseAgent):
             )
         return None
 
-    def _build_template_netlist(self, topology, sizing, constraints):
+    def _build_template_netlist(self, topology, sizing, constraints, case_meta=None):
+        case_meta = case_meta or {}
         if topology == "rc_lowpass":
             r = float(sizing["R_ohm"])
             c = float(sizing["C_f"])
@@ -93,7 +98,7 @@ class NetlistAgent(BaseAgent):
             vin_step = float(constraints.get("vin_step", 1.0))
 
             return f"""* RC low-pass filter demo netlist
-                Vin in 0 DC 0 AC {vin_ac} PULSE(0 {vin_step} 0 1u 1u 1m 2m)
+                Vin in 0 DC 0 AC {vin_ac} PULSE(0 {vin_step} 0 1u 1u 20m 40m)
                 R1 in out {r}
                 C1 out 0 {c}
 
@@ -109,10 +114,100 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
+        if topology == "rlc_lowpass_2nd_order":
+            r = float(sizing["R_ohm"])
+            l_h = float(sizing["L_h"])
+            c_f = float(sizing["C_f"])
+            vin_ac = float(constraints.get("vin_ac", 1.0))
+            vin_step = float(constraints.get("vin_step", 1.0))
+            source_res = float(sizing.get("source_res_ohm", constraints.get("source_res_ohm", 50.0)))
+            load_res = float(sizing.get("load_res_ohm", constraints.get("load_res_ohm", 10000.0)))
+            f_stop = max(1e6, 100.0 * float(constraints.get("target_fc_hz", 5e3)))
+
+            return f"""* Second-order RLC low-pass filter
+                Vin in 0 DC 0 AC {vin_ac} PULSE(0 {vin_step} 0 1u 1u 20m 40m)
+                RSRC in nsrc {source_res}
+                R1 nsrc n1 {r}
+                L1 n1 out {l_h}
+                C1 out 0 {c_f}
+                RLOAD out 0 {load_res}
+
+                .control
+                set wr_singlescale
+                ac dec 200 1 {f_stop}
+                wrdata ac_out.csv frequency vm(out)
+                tran 2u 2m
+                wrdata tran_in.csv time v(in)
+                wrdata tran_out.csv time v(out)
+                quit
+                .endc
+                .end
+                """
+
+        if topology == "rlc_highpass_2nd_order":
+            r = float(sizing["R_ohm"])
+            l_h = float(sizing["L_h"])
+            c_f = float(sizing["C_f"])
+            vin_ac = float(constraints.get("vin_ac", 1.0))
+            vin_step = float(constraints.get("vin_step", 1.0))
+            source_res = float(sizing.get("source_res_ohm", constraints.get("source_res_ohm", 50.0)))
+            load_res = float(sizing.get("load_res_ohm", constraints.get("load_res_ohm", 5000.0)))
+            f_stop = max(1e6, 100.0 * float(constraints.get("target_fc_hz", 2e3)))
+
+            return f"""* Second-order RLC high-pass filter
+                Vin in 0 DC 0 AC {vin_ac} PULSE(0 {vin_step} 0 1u 1u 20m 40m)
+                RSRC in nsrc {source_res}
+                C1 nsrc n1 {c_f}
+                L1 n1 0 {l_h}
+                R1 n1 out {r}
+                RLOAD out 0 {load_res}
+
+                .control
+                set wr_singlescale
+                ac dec 200 1 {f_stop}
+                wrdata ac_out.csv frequency vm(out)
+                tran 2u 2m
+                wrdata tran_in.csv time v(in)
+                wrdata tran_out.csv time v(out)
+                quit
+                .endc
+                .end
+                """
+
+        if topology == "rlc_bandpass_2nd_order":
+            r = float(sizing["R_ohm"])
+            l_h = float(sizing["L_h"])
+            c_f = float(sizing["C_f"])
+            vin_ac = float(constraints.get("vin_ac", 1.0))
+            vin_step = float(constraints.get("vin_step", 0.5))
+            source_res = float(sizing.get("source_res_ohm", constraints.get("source_res_ohm", 50.0)))
+            center_hz = float(constraints.get("target_center_hz", 20e3))
+            f_stop = max(1e6, 100.0 * center_hz)
+
+            return f"""* Second-order RLC band-pass filter
+                Vin in 0 DC 0 AC {vin_ac} PULSE(0 {vin_step} 0 1u 1u 20m 40m)
+                RSRC in nsrc {source_res}
+                L1 nsrc n1 {l_h}
+                C1 n1 n2 {c_f}
+                R1 n2 0 {r}
+
+                .control
+                set wr_singlescale
+                ac dec 200 10 {f_stop}
+                wrdata ac_out.csv frequency vm(n2)
+                tran 1u 1m
+                wrdata tran_in.csv time v(in)
+                wrdata tran_out.csv time v(n2)
+                quit
+                .endc
+                .end
+                """
+
         if topology == "common_source_res_load":
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(sizing.get("Vin_bias", constraints.get("vin_dc", 0.75)))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
+            vin_step = float(constraints.get("vin_step", 0.05))
             load_cap = float(constraints.get("load_cap_f", 1e-12))
             rd = float(sizing["R_D"])
             w = float(sizing["W_m"])
@@ -120,7 +215,7 @@ class NetlistAgent(BaseAgent):
 
             return f"""* Common-source amplifier with resistive load
                 VDD vdd 0 DC {vdd}
-                VIN in 0 DC {vin_dc} AC {vin_ac}
+                VIN in 0 DC {vin_dc} AC {vin_ac} PULSE({vin_dc} {vin_dc + vin_step} 0 2n 2n 100n 200n)
                 RD vdd out {rd}
                 M1 out in 0 0 NMOS W={w} L={l}
                 CLOAD out 0 {load_cap}
@@ -129,9 +224,12 @@ class NetlistAgent(BaseAgent):
                 .control
                 set wr_singlescale
                 op
+                print i(VDD) v(out) v(in)
                 ac dec 100 1 1e9
                 wrdata ac_out.csv frequency vm(out)
-                print v(out) v(in)
+                tran 1n 1u
+                wrdata tran_in.csv time v(in)
+                wrdata tran_out.csv time v(out)
                 print @m1[gm] @m1[gds] @m1[id]
                 quit
                 .endc
@@ -171,7 +269,9 @@ class NetlistAgent(BaseAgent):
             vdd = float(constraints.get("supply_v", 1.8))
             vicm = float(constraints.get("vicm_v", 0.9))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
+            vin_step = float(constraints.get("vin_step", 0.02))
             rload = float(sizing["R_load"])
+            cload = float(constraints.get("load_cap_f", 0.5e-12))
             win = float(sizing["W_in"])
             lin = float(sizing["L_in"])
             wtail = float(sizing["W_tail"])
@@ -179,10 +279,12 @@ class NetlistAgent(BaseAgent):
 
             return f"""* MOS differential pair
                 VDD vdd 0 DC {vdd}
-                VIP inp 0 DC {vicm} AC {vin_ac}
-                VIN inn 0 DC {vicm} AC {-vin_ac}
+                VIP inp 0 DC {vicm} AC {vin_ac} PULSE({vicm} {vicm + vin_step} 0 2n 2n 100n 200n)
+                VIN inn 0 DC {vicm} AC {-vin_ac} PULSE({vicm} {vicm - vin_step} 0 2n 2n 100n 200n)
                 RL1 vdd outp {rload}
                 RL2 vdd outn {rload}
+                CLOADP outp 0 {cload}
+                CLOADN outn 0 {cload}
                 M1 outp inp tail 0 NMOS W={win} L={lin}
                 M2 outn inn tail 0 NMOS W={win} L={lin}
                 MTAIL tail vbias 0 0 NMOS W={wtail} L={ltail}
@@ -192,37 +294,84 @@ class NetlistAgent(BaseAgent):
                 .control
                 set wr_singlescale
                 op
+                print i(VDD) v(outp) v(outn)
                 ac dec 100 1 1e9
-                wrdata ac_out.csv frequency vm(outp)
+                wrdata ac_out.csv frequency vm(outp,outn)
+                tran 1n 1u
+                wrdata tran_in.csv time v(inp)
+                wrdata tran_out.csv time v(outp)
+                wrdata tran_outn.csv time v(outn)
+                wrdata tran_diff.csv time v(outp,outn)
                 quit
                 .endc
                 .end
                 """
 
         if topology == "two_stage_miller":
+            if case_meta.get("demo_model") == "behavioral_opamp_proxy":
+                vdd = float(constraints.get("supply_v", 1.8))
+                vicm = float(sizing.get("Vicm_v", constraints.get("vin_cm_dc", 0.9)))
+                vin_ac = float(constraints.get("vin_ac", 1e-3))
+                vin_step = float(constraints.get("vin_step", 0.03))
+                cload = float(constraints.get("load_cap_f", 1e-12))
+                return f"""* Telescopic cascode OTA transistor-level first-pass netlist
+                VDD vdd 0 DC {vdd}
+                VINP inp 0 DC {vicm} AC {vin_ac} PULSE({vicm} {vicm + vin_step} 0 2n 2n 100n 200n)
+                VBN vbn 0 DC {float(sizing['Vbias_n'])}
+                VBP vbp 0 DC {float(sizing['Vbias_p'])}
+                IREF nbias 0 DC {float(sizing['I_tail'])}
+                MPBIAS nbias vbp vdd vdd PMOS W={float(sizing['W_load_p'])} L={float(sizing['L_load_p'])}
+                MPLOAD out vbp vdd vdd PMOS W={float(sizing['W_load_p'])} L={float(sizing['L_load_p'])}
+                MNCAS out vbn x 0 NMOS W={float(sizing['W_cas_n'])} L={float(sizing['L_cas_n'])}
+                MNIN x inp 0 0 NMOS W={float(sizing['W_in'])} L={float(sizing['L_in'])}
+                CLOAD out 0 {cload}
+                .model NMOS NMOS (LEVEL=1 VTO=0.5 KP=200u LAMBDA=0.02)
+                .model PMOS PMOS (LEVEL=1 VTO=-0.5 KP=80u LAMBDA=0.02)
+
+                .control
+                set wr_singlescale
+                op
+                print i(VDD) v(out) v(x)
+                ac dec 100 1 1e9
+                wrdata ac_out.csv frequency vm(out)
+                tran 1n 1u
+                wrdata tran_in.csv time v(inp)
+                wrdata tran_out.csv time v(out)
+                quit
+                .endc
+                .end
+                """
+
             vdd = float(constraints.get("supply_v", 1.8))
             cc = float(sizing["Cc_f"])
             load_cap = float(constraints.get("load_cap_f", 1e-12))
             vin_ac = float(constraints.get("vin_ac", 1.0))
             vin_step = float(constraints.get("vin_step", 0.05))
-            vin_cm = float(constraints.get("vin_cm_dc", 0.0))
+            vin_cm = float(constraints.get("vin_cm_dc", 0.5 * vdd))
+            vref = 0.5 * vdd
+            stage_gain = float(sizing.get("stage_gain_linear", 316.2))
 
             return f"""* Two-stage Miller op-amp first-pass behavioral placeholder
                 VDD vdd 0 DC {vdd}
-                VIN in 0 DC {vin_cm} AC {vin_ac} PULSE(0 {vin_step} 0 2n 2n 100n 200n)
-                E1 n1 0 in 0 316.2
+                VCM vcm 0 DC {vin_cm}
+                VREF ref 0 DC {vref}
+                VIN in 0 DC {vin_cm} AC {vin_ac} PULSE({vin_cm} {vin_cm + vin_step} 0 2n 2n 100n 200n)
+                E1 n1 0 in vcm {stage_gain}
                 R1 n1 0 100k
                 C1 n1 0 1p
-                E2 out 0 n1 0 316.2
-                R2 out 0 20k
-                CLOAD out 0 {load_cap}
-                CCOMP n1 out {cc}
+                E2 raw ref n1 0 {stage_gain}
+                R2 raw ref 20k
+                CLOAD raw 0 {load_cap}
+                CCOMP n1 raw {cc}
+                BOUT out 0 V = 0.5*v(vdd)*(1 + tanh((v(raw)-v(ref))/0.2))
+                RMON out 0 1e9
 
                 .control
                 set wr_singlescale
                 op
+                print i(VDD) v(out)
                 ac dec 100 1 1e9
-                wrdata ac_out.csv frequency vm(out)
+                wrdata ac_out.csv frequency vm(raw)
                 tran 1n 1u
                 wrdata tran_in.csv time v(in)
                 wrdata tran_out.csv time v(out)
@@ -252,6 +401,7 @@ class NetlistAgent(BaseAgent):
                 .control
                 set wr_singlescale
                 op
+                print i(VDD) v(out)
                 ac dec 100 1 1e8
                 wrdata ac_out.csv frequency vm(out)
                 tran 1n 1u
@@ -264,7 +414,7 @@ class NetlistAgent(BaseAgent):
 
         if topology == "common_drain":
             vdd = float(constraints.get("supply_v", 1.8))
-            vin_dc = float(constraints.get("vin_dc", 0.8))
+            vin_dc = float(sizing.get("Vin_bias", constraints.get("vin_dc", 0.8)))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
             vin_step = float(constraints.get("vin_step", 0.05))
             w = float(sizing["W_m"])
@@ -282,6 +432,7 @@ class NetlistAgent(BaseAgent):
                 .control
                 set wr_singlescale
                 op
+                print i(VDD) v(out)
                 ac dec 100 1 1e8
                 wrdata ac_out.csv frequency vm(out)
                 tran 1n 1u
@@ -314,6 +465,7 @@ class NetlistAgent(BaseAgent):
                 .control
                 set wr_singlescale
                 op
+                print i(VDD) v(out)
                 ac dec 100 1 1e8
                 wrdata ac_out.csv frequency vm(out)
                 tran 1n 1u
@@ -328,6 +480,7 @@ class NetlistAgent(BaseAgent):
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(constraints.get("vin_dc", 0.85))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
+            vin_step = float(constraints.get("vin_step", 0.05))
             w = float(sizing["W_m"])
             l = float(sizing["L_m"])
             rd = float(sizing["R_D"])
@@ -335,7 +488,7 @@ class NetlistAgent(BaseAgent):
 
             return f"""* Source-degenerated common-source amplifier
                 VDD vdd 0 DC {vdd}
-                VIN in 0 DC {vin_dc} AC {vin_ac}
+                VIN in 0 DC {vin_dc} AC {vin_ac} PULSE({vin_dc} {vin_dc + vin_step} 0 2n 2n 100n 200n)
                 RD vdd out {rd}
                 RS src 0 {rs}
                 M1 out in src 0 NMOS W={w} L={l}
@@ -345,8 +498,12 @@ class NetlistAgent(BaseAgent):
                 .control
                 set wr_singlescale
                 op
+                print i(VDD) v(out)
                 ac dec 100 1 1e8
                 wrdata ac_out.csv frequency vm(out)
+                tran 1n 1u
+                wrdata tran_in.csv time v(in)
+                wrdata tran_out.csv time v(out)
                 quit
                 .endc
                 .end
@@ -356,6 +513,7 @@ class NetlistAgent(BaseAgent):
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(sizing.get("Vin_bias", constraints.get("vin_dc", 0.75)))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
+            vin_step = float(constraints.get("vin_step", 0.03))
             wn = float(sizing["W_n"])
             ln = float(sizing["L_n"])
             wp = float(sizing["W_p"])
@@ -364,7 +522,7 @@ class NetlistAgent(BaseAgent):
 
             return f"""* Common-source amplifier with PMOS current-mirror active load
                 VDD vdd 0 DC {vdd}
-                VIN in 0 DC {vin_dc} AC {vin_ac}
+                VIN in 0 DC {vin_dc} AC {vin_ac} PULSE({vin_dc} {vin_dc + vin_step} 0 2n 2n 100n 200n)
                 IREF nbias 0 DC {ibias}
                 MBIAS nbias nbias vdd vdd PMOS W={wp} L={lp}
                 MLOAD out nbias vdd vdd PMOS W={wp} L={lp}
@@ -376,9 +534,12 @@ class NetlistAgent(BaseAgent):
                 .control
                 set wr_singlescale
                 op
-                print v(out) v(nbias) @m1[gm] @m1[gds] @mload[gds]
+                print i(VDD) v(out) v(nbias) @m1[gm] @m1[gds] @mload[gds]
                 ac dec 100 1 1e8
                 wrdata ac_out.csv frequency vm(out)
+                tran 1n 1u
+                wrdata tran_in.csv time v(in)
+                wrdata tran_out.csv time v(out)
                 quit
                 .endc
                 .end
@@ -388,6 +549,7 @@ class NetlistAgent(BaseAgent):
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(constraints.get("vin_dc", 0.75))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
+            vin_step = float(constraints.get("vin_step", 0.03))
             wn = float(sizing["W_n"])
             ln = float(sizing["L_n"])
             wp = float(sizing["W_p"])
@@ -395,7 +557,7 @@ class NetlistAgent(BaseAgent):
 
             return f"""* Common-source stage with diode-connected PMOS load
                 VDD vdd 0 DC {vdd}
-                VIN in 0 DC {vin_dc} AC {vin_ac}
+                VIN in 0 DC {vin_dc} AC {vin_ac} PULSE({vin_dc} {vin_dc + vin_step} 0 2n 2n 100n 200n)
                 MLOAD out out vdd vdd PMOS W={wp} L={lp}
                 M1 out in 0 0 NMOS W={wn} L={ln}
                 CLOAD out 0 {float(constraints.get("load_cap_f", 1e-12))}
@@ -405,8 +567,12 @@ class NetlistAgent(BaseAgent):
                 .control
                 set wr_singlescale
                 op
+                print i(VDD) v(out)
                 ac dec 100 1 1e8
                 wrdata ac_out.csv frequency vm(out)
+                tran 1n 1u
+                wrdata tran_in.csv time v(in)
+                wrdata tran_out.csv time v(out)
                 quit
                 .endc
                 .end
@@ -416,11 +582,12 @@ class NetlistAgent(BaseAgent):
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(constraints.get("vin_dc", 0.7))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
+            vin_step = float(constraints.get("vin_step", 0.02))
             rd = float(sizing["R_D"])
 
             return f"""* NMOS cascode amplifier with resistive load
                 VDD vdd 0 DC {vdd}
-                VIN in 0 DC {vin_dc} AC {vin_ac}
+                VIN in 0 DC {vin_dc} AC {vin_ac} PULSE({vin_dc} {vin_dc + vin_step} 0 2n 2n 100n 200n)
                 VCAS vbias 0 DC {float(sizing["Vbias_cas"])}
                 RD vdd out {rd}
                 M2 out vbias x 0 NMOS W={float(sizing["W_cas"])} L={float(sizing["L_cas"])}
@@ -431,8 +598,12 @@ class NetlistAgent(BaseAgent):
                 .control
                 set wr_singlescale
                 op
+                print i(VDD) v(out)
                 ac dec 100 1 1e8
                 wrdata ac_out.csv frequency vm(out)
+                tran 1n 1u
+                wrdata tran_in.csv time v(in)
+                wrdata tran_out.csv time v(out)
                 quit
                 .endc
                 .end
@@ -472,8 +643,8 @@ class NetlistAgent(BaseAgent):
             return f"""* 6T SRAM cell write/read demo
                 VDD vdd 0 DC {vdd}
                 VBL bl 0 PULSE({vdd} {vdd} 0 100p 100p 20n 40n)
-                VBLB blb 0 PULSE({vdd} 0 4n 100p 100p 8n 20n)
-                VWL wl 0 PULSE(0 {vdd} 5n 100p 100p 6n 20n)
+                VBLB blb 0 PULSE({vdd} 0 4n 100p 100p 12n 30n)
+                VWL wl 0 PULSE(0 {vdd} 5n 100p 100p 10n 30n)
                 MP1 q qb vdd vdd PMOS W={float(sizing["W_pullup"])} L={float(sizing["L_pullup"])}
                 MP2 qb q vdd vdd PMOS W={float(sizing["W_pullup"])} L={float(sizing["L_pullup"])}
                 MN1 q qb 0 0 NMOS W={float(sizing["W_pulldown"])} L={float(sizing["L_pulldown"])}
@@ -488,6 +659,9 @@ class NetlistAgent(BaseAgent):
 
                 .control
                 tran 50p 30n
+                wrdata tran_bl.csv time v(bl)
+                wrdata tran_blb.csv time v(blb)
+                wrdata tran_wl.csv time v(wl)
                 wrdata tran_out.csv time v(q)
                 wrdata tran_qb.csv time v(qb)
                 quit
@@ -509,12 +683,13 @@ class NetlistAgent(BaseAgent):
                 M1 outp outn tail 0 NMOS W={float(sizing["W_pair"])} L={float(sizing["L_pair"])}
                 M2 outn outp tail 0 NMOS W={float(sizing["W_pair"])} L={float(sizing["L_pair"])}
                 RSTART outp outn 1e6
-                .ic v(outp)=0.01 v(outn)=0
+                .ic v(outp)={vdd + 0.01} v(outn)={vdd - 0.01}
                 .model NMOS NMOS (LEVEL=1 VTO=0.5 KP=200u LAMBDA=0.02)
 
                 .control
-                tran 20p 100n
+                tran 20p 100n uic
                 wrdata tran_out.csv time v(outp)
+                wrdata tran_outn.csv time v(outn)
                 wrdata tran_diff.csv time v(outp,outn)
                 quit
                 .endc

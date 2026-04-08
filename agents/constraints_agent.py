@@ -22,7 +22,15 @@ class ConstraintReport:
 
 class ConstraintAgent(BaseAgent):
     ANALYSIS_TARGET_KEYS = {
-        "ac": {"target_fc_hz", "target_gain_db", "target_bw_hz", "target_ugbw_hz", "phase_margin_deg"},
+        "ac": {
+            "target_fc_hz",
+            "target_gain_db",
+            "target_bw_hz",
+            "target_ugbw_hz",
+            "phase_margin_deg",
+            "target_center_hz",
+            "target_stopband_atten_db",
+        },
         "dc": {"target_iout_a", "compliance_v", "target_vref_v"},
         "tran": {"target_slew_v_per_us", "target_osc_hz"},
         "op": {"power_limit_mw", "supply_v", "target_gm_s"},
@@ -31,6 +39,9 @@ class ConstraintAgent(BaseAgent):
 
     REQUIRED_CONSTRAINT_KEYS_BY_TEMPLATE = {
         "filter_rc": ["target_fc_hz"],
+        "filter_rlc_lowpass": ["target_fc_hz"],
+        "filter_rlc_highpass": ["target_fc_hz"],
+        "filter_rlc_bandpass": ["target_center_hz", "target_bw_hz"],
         "amplifier_single_stage": ["supply_v", "target_gain_db", "target_bw_hz", "power_limit_mw"],
         "amplifier_differential": ["supply_v", "power_limit_mw"],
         "amplifier_differential_bjt": ["tail_current_a", "collector_res_ohm"],
@@ -54,6 +65,9 @@ class ConstraintAgent(BaseAgent):
 
     REQUIRED_SIZING_KEYS_BY_TOPOLOGY = {
         "rc_lowpass": ["R_ohm", "C_f"],
+        "rlc_lowpass_2nd_order": ["R_ohm", "L_h", "C_f", "q_target", "damping_ratio"],
+        "rlc_highpass_2nd_order": ["R_ohm", "L_h", "C_f", "q_target", "damping_ratio"],
+        "rlc_bandpass_2nd_order": ["R_ohm", "L_h", "C_f", "q_target"],
         "common_source_res_load": ["W_m", "L_m", "R_D", "I_bias"],
         "diff_pair": ["W_in", "L_in", "W_tail", "L_tail", "I_tail", "R_load"],
         "bjt_diff_pair": ["I_tail", "Ic_each", "R_C", "gm_each"],
@@ -74,6 +88,9 @@ class ConstraintAgent(BaseAgent):
 
     POSITIVE_CONSTRAINTS_BY_TEMPLATE = {
         "filter_rc": ["target_fc_hz"],
+        "filter_rlc_lowpass": ["target_fc_hz"],
+        "filter_rlc_highpass": ["target_fc_hz"],
+        "filter_rlc_bandpass": ["target_center_hz", "target_bw_hz"],
         "amplifier_single_stage": ["supply_v", "target_bw_hz", "power_limit_mw"],
         "amplifier_differential": ["supply_v", "power_limit_mw"],
         "amplifier_differential_bjt": ["tail_current_a", "collector_res_ohm"],
@@ -129,6 +146,9 @@ class ConstraintAgent(BaseAgent):
         )
         required_constraints = self.REQUIRED_CONSTRAINT_KEYS_BY_TEMPLATE.get(template, [])
         required_sizing = self.REQUIRED_SIZING_KEYS_BY_TOPOLOGY.get(topology_key, [])
+        case_meta = state.get("case_metadata") or {}
+        if topology_key == "two_stage_miller" and case_meta.get("demo_model") == "behavioral_opamp_proxy":
+            required_sizing = ["I_tail", "W_in", "W_cas_n", "W_load_p", "Vbias_n", "Vbias_p"]
 
         for key in required_constraints:
             if constraints.get(key) is None:
@@ -181,6 +201,30 @@ class ConstraintAgent(BaseAgent):
                 rel_err = abs(fc_est - fc_target) / fc_target
                 if rel_err > 0.30:
                     warnings.append("Initial RC sizing is more than 30% away from target_fc_hz")
+
+        elif topology_key in {"rlc_lowpass_2nd_order", "rlc_highpass_2nd_order"}:
+            l_h = sizing.get("L_h")
+            c_f = sizing.get("C_f")
+            q_target = sizing.get("q_target")
+            if l_h is not None and l_h <= 0:
+                issues.append("L_h must be > 0")
+            if c_f is not None and c_f <= 0:
+                issues.append("C_f must be > 0")
+            if q_target is not None and q_target <= 0:
+                issues.append("q_target must be > 0")
+            if sizing.get("filter_order") not in (2, None):
+                warnings.append("Current implementation realizes a single second-order section even if filter_order > 2.")
+            if constraints.get("target_stopband_atten_db") is not None and constraints.get("target_stopband_atten_db") > 40:
+                warnings.append("Single-section RLC filters may not meet aggressive stopband attenuation without cascading sections.")
+
+        elif topology_key == "rlc_bandpass_2nd_order":
+            center_hz = constraints.get("target_center_hz")
+            bw_hz = constraints.get("target_bw_hz")
+            if center_hz is not None and bw_hz is not None and bw_hz >= center_hz:
+                issues.append("target_bw_hz must be less than target_center_hz for a meaningful band-pass section.")
+            q_target = sizing.get("q_target")
+            if q_target is not None and q_target > 20:
+                warnings.append("Very high-Q band-pass targets may be sensitive to component tolerance and loss.")
 
         elif topology_key == "common_source_res_load":
             VDD = constraints.get("supply_v")

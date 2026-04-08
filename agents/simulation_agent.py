@@ -20,6 +20,9 @@ from core.shared_memory import SharedMemory
 class SimulationAgent(BaseAgent):
     AC_EXPECTED_TOPOLOGIES = {
         "rc_lowpass",
+        "rlc_lowpass_2nd_order",
+        "rlc_highpass_2nd_order",
+        "rlc_bandpass_2nd_order",
         "common_source_res_load",
         "diff_pair",
         "two_stage_miller",
@@ -132,6 +135,8 @@ class SimulationAgent(BaseAgent):
                     sim["ac_points"] = len(ac_data["x"])
                     ac_plot = os.path.join(base_dir, "ac_plot.svg")
                     input_ac_mag = float(constraints.get("vin_ac", 1.0))
+                    if topology == "diff_pair":
+                        input_ac_mag *= 2.0
                     self._plot_ac(ac_data, ac_plot, input_ac_mag=input_ac_mag)
                     sim["ac_plot"] = ac_plot
                     gain_db, bw_hz = self._extract_gain_bw_from_ac(ac_data, input_ac_mag=input_ac_mag)
@@ -141,8 +146,20 @@ class SimulationAgent(BaseAgent):
                     if bw_hz is not None: 
                         sim["bandwidth_hz"] = bw_hz
 
-                    if topology == "rc_lowpass":
+                    if topology in {"rc_lowpass", "rlc_lowpass_2nd_order"}:
                         sim["fc_hz_from_ac"] = self._estimate_cutoff_from_ac(ac_data)
+                    elif topology == "rlc_highpass_2nd_order":
+                        sim["fc_hz_from_ac"] = self._estimate_highpass_cutoff_from_ac(
+                            ac_data,
+                            input_ac_mag=input_ac_mag,
+                        )
+                    elif topology == "rlc_bandpass_2nd_order":
+                        sim.update(
+                            self._estimate_bandpass_metrics_from_ac(
+                                ac_data,
+                                input_ac_mag=input_ac_mag,
+                            )
+                        )
                 else:
                     sim["parser_warning"] = (
                         "AC file was created, but parser could not extract usable AC points."
@@ -176,6 +193,7 @@ class SimulationAgent(BaseAgent):
             # -------------------------
             # Transient artifacts
             # -------------------------
+            tran_series = {}
             tran_in_data = None
             tran_out_data = None
             tran_qb_data = None
@@ -186,6 +204,7 @@ class SimulationAgent(BaseAgent):
                 shutil.copy2(tran_in_csv, saved_tran_in_csv)
                 sim["tran_in_csv"] = saved_tran_in_csv
                 tran_in_data = self._read_wrdata_xy(saved_tran_in_csv)
+                tran_series["V(in)"] = tran_in_data
 
             if os.path.exists(tran_out_csv):
                 saved_tran_out_csv = os.path.join(base_dir, "tran_out.csv")
@@ -193,6 +212,23 @@ class SimulationAgent(BaseAgent):
                 sim["tran_out_csv"] = saved_tran_out_csv
                 sim["tran_preview"] = self._preview_file(saved_tran_out_csv, max_lines=5)
                 tran_out_data = self._read_wrdata_xy(saved_tran_out_csv)
+                tran_series["V(out)"] = tran_out_data
+
+            extra_tran_specs = [
+                ("tran_in_a.csv", "tran_in_a_csv", "V(in_a)"),
+                ("tran_in_b.csv", "tran_in_b_csv", "V(in_b)"),
+                ("tran_bl.csv", "tran_bl_csv", "V(BL)"),
+                ("tran_blb.csv", "tran_blb_csv", "V(BLB)"),
+                ("tran_wl.csv", "tran_wl_csv", "V(WL)"),
+                ("tran_outn.csv", "tran_outn_csv", "V(outn)"),
+            ]
+            for filename, sim_key, label in extra_tran_specs:
+                candidate = os.path.join(tmpdir, filename)
+                if os.path.exists(candidate):
+                    saved_candidate = os.path.join(base_dir, filename)
+                    shutil.copy2(candidate, saved_candidate)
+                    sim[sim_key] = saved_candidate
+                    tran_series[label] = self._read_wrdata_xy(saved_candidate)
 
             tran_qb_csv = os.path.join(tmpdir, "tran_qb.csv")
             if os.path.exists(tran_qb_csv):
@@ -200,6 +236,7 @@ class SimulationAgent(BaseAgent):
                 shutil.copy2(tran_qb_csv, saved_tran_qb_csv)
                 sim["tran_qb_csv"] = saved_tran_qb_csv
                 tran_qb_data = self._read_wrdata_xy(saved_tran_qb_csv)
+                tran_series["V(QB)"] = tran_qb_data
 
             tran_diff_csv = os.path.join(tmpdir, "tran_diff.csv")
             if os.path.exists(tran_diff_csv):
@@ -207,10 +244,11 @@ class SimulationAgent(BaseAgent):
                 shutil.copy2(tran_diff_csv, saved_tran_diff_csv)
                 sim["tran_diff_csv"] = saved_tran_diff_csv
                 tran_diff_data = self._read_wrdata_xy(saved_tran_diff_csv)
+                tran_series["V(outp,outn)"] = tran_diff_data
 
             if tran_out_data and tran_out_data["x"] and tran_out_data["y"]:
                 tran_plot = os.path.join(base_dir, "tran_plot.svg")
-                self._plot_tran(tran_in_data, tran_out_data, tran_plot)
+                self._plot_tran_series(tran_series, tran_plot)
                 sim["tran_plot"] = tran_plot
                 sim["tran_points"] = len(tran_out_data["x"])
             
@@ -229,6 +267,10 @@ class SimulationAgent(BaseAgent):
                     vref = self._extract_named_voltage_from_log(sim.get("log_preview"), "v(ref)")
                     if vref is not None:
                         sim["vref_v"] = vref
+
+                supply_i = self._extract_named_current_from_log(sim.get("log_preview"), "i(vdd)")
+                if supply_i is not None:
+                    sim["supply_current_a"] = abs(supply_i)
 
                 if topology in (
                     "common_source_res_load",
@@ -280,6 +322,24 @@ class SimulationAgent(BaseAgent):
                             sim["fc_hz"] = fc_ac
                 else:
                     sim["fc_hz"] = fc_ac
+
+            if topology in {"rlc_lowpass_2nd_order", "rlc_highpass_2nd_order"}:
+                sim.pop("gain_db", None)
+                sim.pop("bandwidth_hz", None)
+                sim["fc_hz"] = sim.get("fc_hz_from_ac") or sizing.get("target_fc_hz")
+                sim["q_factor"] = sizing.get("q_target")
+                sim["damping_ratio"] = sizing.get("damping_ratio")
+                sim["rolloff_db_per_dec"] = sizing.get("rolloff_db_per_dec")
+                sim["response_family"] = sizing.get("response_family")
+
+            if topology == "rlc_bandpass_2nd_order":
+                sim.pop("gain_db", None)
+                sim.setdefault("center_hz", sizing.get("target_center_hz"))
+                sim.setdefault("bandwidth_hz", sizing.get("target_bw_hz"))
+                sim["q_factor"] = sim.get("q_factor") or sizing.get("q_target")
+                sim["damping_ratio"] = sizing.get("damping_ratio")
+                sim["rolloff_db_per_dec"] = sizing.get("rolloff_db_per_dec")
+                sim["response_family"] = sizing.get("response_family")
             
             if topology in (
                 "common_source_res_load",
@@ -291,9 +351,33 @@ class SimulationAgent(BaseAgent):
                 "common_gate",
             ):
                 vdd = memory.read("constraints").get("supply_v")
+                supply_i = sim.get("supply_current_a")
                 ibias = sizing.get("I_bias")
-                if vdd is not None and ibias is not None:
-                    sim["power_mw"] = 1000.0 * float(vdd) * float(ibias)
+                current_for_power = supply_i if supply_i is not None else ibias
+                if vdd is not None and current_for_power is not None:
+                    sim["power_mw"] = 1000.0 * float(vdd) * float(current_for_power)
+
+            if topology in {"diff_pair", "two_stage_miller"}:
+                vdd = memory.read("constraints").get("supply_v")
+                supply_i = sim.get("supply_current_a")
+                if vdd is not None and supply_i is not None and supply_i > 0:
+                    sim["power_mw"] = 1000.0 * float(vdd) * float(supply_i)
+                elif topology == "two_stage_miller":
+                    fallback_i = float(sizing.get("I_stage1_a", 0.0)) + float(sizing.get("I_stage2_a", 0.0))
+                    if fallback_i > 0:
+                        sim["power_mw"] = 1000.0 * float(vdd) * fallback_i
+
+            if topology == "bandgap_reference_core":
+                vdd = memory.read("constraints").get("supply_v")
+                supply_i = sim.get("supply_current_a")
+                if vdd is not None and supply_i is not None:
+                    sim["power_mw"] = 1000.0 * float(vdd) * float(supply_i)
+
+            power_limit_mw = memory.read("constraints").get("power_limit_mw")
+            if power_limit_mw is not None and sim.get("power_mw") is not None:
+                sim["power_limit_mw"] = float(power_limit_mw)
+                sim["power_margin_mw"] = float(power_limit_mw) - float(sim["power_mw"])
+                sim["power_limit_ok"] = sim["power_mw"] <= float(power_limit_mw)
 
             if topology == "lc_oscillator_cross_coupled":
                 osc_data = tran_diff_data or tran_out_data
@@ -540,6 +624,55 @@ class SimulationAgent(BaseAgent):
             ylabel="Voltage (V)",
         )
 
+    def _plot_tran_series(self, series_map, out_path):
+        ordered = []
+        palette = [
+            "#dc2626",
+            "#1d4ed8",
+            "#0f766e",
+            "#7c3aed",
+            "#ea580c",
+            "#0891b2",
+        ]
+
+        for label, data in series_map.items():
+            if not data or not data.get("x") or not data.get("y"):
+                continue
+            ordered.append((label, data))
+
+        if not ordered:
+            return
+
+        x_values = ordered[0][1]["x"]
+        y_series = [
+            (label, data["y"], palette[idx % len(palette)])
+            for idx, (label, data) in enumerate(ordered)
+        ]
+
+        plt = self._get_pyplot()
+        if plt is not None:
+            plt.figure(figsize=(8, 5))
+            for label, data in ordered:
+                plt.plot(data["x"], data["y"], label=label)
+            plt.xlabel("Time (s)")
+            plt.ylabel("Voltage (V)")
+            plt.title("Transient Response")
+            plt.grid(True)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=160)
+            plt.close()
+            return
+
+        self._write_svg_plot(
+            out_path=out_path,
+            x_values=x_values,
+            y_series=y_series,
+            title="Transient Response",
+            xlabel="Time (s)",
+            ylabel="Voltage (V)",
+        )
+
     def _plot_dc(self, dc_data, out_path, xlabel="Input", ylabel="Output"):
         if not dc_data or not dc_data["x"] or not dc_data["y"]:
             return
@@ -602,6 +735,60 @@ class SimulationAgent(BaseAgent):
         idx = min(range(len(mags)), key=lambda i: abs(mags[i] - target))
         return xs[idx]
 
+    def _estimate_highpass_cutoff_from_ac(self, data, input_ac_mag=1.0):
+        xs = data.get("x", [])
+        ys = data.get("y", [])
+        if len(xs) < 3 or len(ys) < 3:
+            return None
+
+        input_ac_mag = max(float(input_ac_mag), 1e-20)
+        gains = [max(abs(v) / input_ac_mag, 1e-20) for v in ys]
+        ref = max(gains)
+        target = ref / math.sqrt(2.0)
+
+        for i in range(1, len(gains)):
+            if gains[i - 1] <= target <= gains[i]:
+                return xs[i]
+
+        idx = min(range(len(gains)), key=lambda i: abs(gains[i] - target))
+        return xs[idx]
+
+    def _estimate_bandpass_metrics_from_ac(self, data, input_ac_mag=1.0):
+        xs = data.get("x", [])
+        ys = data.get("y", [])
+        if len(xs) < 5 or len(ys) < 5:
+            return {}
+
+        input_ac_mag = max(float(input_ac_mag), 1e-20)
+        gains = [max(abs(v) / input_ac_mag, 1e-20) for v in ys]
+        peak_idx = max(range(len(gains)), key=lambda i: gains[i])
+        peak_gain = gains[peak_idx]
+        peak_gain_db = 20.0 * math.log10(max(peak_gain, 1e-20))
+        center_hz = xs[peak_idx]
+        target = peak_gain / math.sqrt(2.0)
+
+        lower = None
+        for i in range(peak_idx, 0, -1):
+            if gains[i - 1] <= target <= gains[i]:
+                lower = xs[i]
+                break
+
+        upper = None
+        for i in range(peak_idx + 1, len(gains)):
+            if gains[i] <= target <= gains[i - 1]:
+                upper = xs[i]
+                break
+
+        metrics = {
+            "center_hz": center_hz,
+            "peak_gain_db": peak_gain_db,
+        }
+        if lower is not None and upper is not None and upper > lower:
+            bandwidth_hz = upper - lower
+            metrics["bandwidth_hz"] = bandwidth_hz
+            metrics["q_factor"] = center_hz / max(bandwidth_hz, 1e-30)
+        return metrics
+
     def _extract_gain_bw_from_ac(self, data, input_ac_mag=1.0):
         xs = data.get("x", [])
         ys = data.get("y", [])
@@ -638,6 +825,20 @@ class SimulationAgent(BaseAgent):
         return None
 
     def _extract_named_voltage_from_log(self, preview_lines, token):
+        token = token.lower()
+        for line in preview_lines or []:
+            line_lower = line.lower()
+            if token not in line_lower:
+                continue
+            match = re.search(rf"{re.escape(token)}\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)", line_lower)
+            if match:
+                try:
+                    return float(match.group(1))
+                except ValueError:
+                    return None
+        return None
+
+    def _extract_named_current_from_log(self, preview_lines, token):
         token = token.lower()
         for line in preview_lines or []:
             line_lower = line.lower()
