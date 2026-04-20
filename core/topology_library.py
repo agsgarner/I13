@@ -1,4 +1,16 @@
 TOPOLOGY_LIBRARY = {
+    "composite_pipeline": {
+        "name": "Composite Multi-Stage Pipeline",
+        "category": "composite",
+        "constraint_template": "composite_pipeline",
+        "complexity": "high",
+        "simulation_plan": {
+            "analyses": ["op", "ac", "tran"],
+            "intent": "Validate end-to-end behavior for cascaded stages selected by topology planning.",
+            "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
+            "required_constraint_targets": ["supply_v"],
+        },
+    },
     "rc_lowpass": {
         "name": "Single-Stage RC Low-Pass Filter",
         "category": "filter",
@@ -81,6 +93,18 @@ TOPOLOGY_LIBRARY = {
             "intent": "Validate mirrored current and confirm high output resistance over a DC compliance sweep.",
             "primary_metrics": ["iout_a"],
             "required_constraint_targets": ["target_iout_a"],
+        },
+    },
+    "widlar_current_mirror": {
+        "name": "Widlar Current Mirror",
+        "category": "bias",
+        "constraint_template": "bias_current_mirror_precision",
+        "complexity": "medium",
+        "simulation_plan": {
+            "analyses": ["op", "dc"],
+            "intent": "Validate low-current bias generation and output-current compliance across a DC sweep.",
+            "primary_metrics": ["iout_a"],
+            "required_constraint_targets": ["target_iout_a", "compliance_v"],
         },
     },
     "common_source_res_load": {
@@ -270,9 +294,9 @@ TOPOLOGY_LIBRARY = {
         "complexity": "high",
         "simulation_plan": {
             "analyses": ["op", "ac", "tran"],
-            "intent": "Check folded-cascode biasing and confirm gain, bandwidth, and transient behavior.",
-            "primary_metrics": ["gain_db", "bandwidth_hz"],
-            "required_constraint_targets": ["target_gain_db", "target_ugbw_hz"],
+            "intent": "Check folded-cascode biasing and confirm gain, unity-gain bandwidth, and transient settling behavior.",
+            "primary_metrics": ["gain_db", "ugbw_hz", "power_mw"],
+            "required_constraint_targets": ["target_gain_db", "target_ugbw_hz", "power_limit_mw"],
         },
     },
     "comparator": {
@@ -282,9 +306,9 @@ TOPOLOGY_LIBRARY = {
         "complexity": "medium",
         "simulation_plan": {
             "analyses": ["tran"],
-            "intent": "Verify decision behavior and switching response in transient.",
-            "primary_metrics": [],
-            "required_constraint_targets": ["supply_v"],
+            "intent": "Verify regenerative decision behavior, output polarity, and delay in transient.",
+            "primary_metrics": ["decision_delay_s", "decision_correct"],
+            "required_constraint_targets": ["supply_v", "input_overdrive_v"],
         },
     },
 }

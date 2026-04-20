@@ -6,7 +6,12 @@ from flow.pocketflow import Flow, Node
 
 class FinalizeNode(Node):
     def post(self, shared, prep_res, exec_res):
-        shared.write("status", DesignStatus.DESIGN_VALIDATED)
+        sim = shared.read("simulation_results") or {}
+        verification = sim.get("verification_summary") or {}
+        if verification.get("fails", 0) > 0:
+            shared.write("status", DesignStatus.DESIGN_INVALID)
+        else:
+            shared.write("status", DesignStatus.DESIGN_VALIDATED)
         return "done"
 
 
@@ -40,6 +45,7 @@ def build_design_flow(
     sizing_agent,
     constraint_agent,
     netlist_agent,
+    op_point_agent,
     simulation_agent,
     refinement_agent,
     max_iterations=3,
@@ -60,8 +66,12 @@ def build_design_flow(
     constraint_agent - DesignStatus.CONSTRAINTS_OK >> netlist_agent
     constraint_agent - DesignStatus.CONSTRAINTS_FAILED >> fail
 
-    netlist_agent - DesignStatus.NETLIST_GENERATED >> simulation_agent
+    netlist_agent - DesignStatus.NETLIST_GENERATED >> op_point_agent
     netlist_agent - DesignStatus.NETLIST_FAILED >> fail
+
+    op_point_agent - DesignStatus.OP_SIZING_COMPLETE >> simulation_agent
+    op_point_agent - DesignStatus.OP_SIZING_REFINED >> constraint_agent
+    op_point_agent - DesignStatus.OP_SIZING_FAILED >> fail
 
     simulation_agent - DesignStatus.SIMULATION_COMPLETE >> refinement_agent
     simulation_agent - DesignStatus.SIMULATION_FAILED >> fail

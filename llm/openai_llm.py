@@ -9,7 +9,7 @@ from core.llm_interface import LLMInterface
 
 
 class OpenAILLM(LLMInterface):
-    def __init__(self, model="gpt-4.1-mini", api_key=None, temperature=0.2):
+    def __init__(self, model="gpt-5.4-mini", api_key=None, temperature=0.2):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("Set OPENAI_API_KEY in your environment.")

@@ -9,6 +9,12 @@ ANALOG_DEFAULTS = {
         "vth_n_v": 0.5,
         "target_vov_v": 0.2,
     },
+    "methodology": {
+        "gm_id_target_s_per_a_moderate": 12.0,
+        "gm_id_target_s_per_a_low_power": 16.0,
+        "gm_id_target_s_per_a_high_speed": 8.0,
+        "ro_floor_ohm": 1e4,
+    },
     "common_source": {
         "target_vout_q_ratio": 0.5,
         "vin_ac_small_signal_v": 1e-3,
@@ -28,5 +34,9 @@ ANALOG_DEFAULTS = {
     "opamp": {
         "phase_margin_deg": 60.0,
         "target_slew_v_per_us": 5.0,
-    }
+    },
+    "topology_selection": {
+        "max_stage_count": 4,
+        "enable_llm_stage_planning": True,
+    },
 }

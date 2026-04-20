@@ -16,6 +16,10 @@ class DesignStatus:
     NETLIST_GENERATED = "netlist_generated"
     NETLIST_FAILED = "netlist_failed"
 
+    OP_SIZING_COMPLETE = "op_sizing_complete"
+    OP_SIZING_REFINED = "op_sizing_refined"
+    OP_SIZING_FAILED = "op_sizing_failed"
+
     SIMULATION_COMPLETE = "simulation_complete"
     SIMULATION_FAILED = "simulation_failed"
 

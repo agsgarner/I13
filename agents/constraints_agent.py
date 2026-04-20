@@ -50,17 +50,21 @@ class ConstraintAgent(BaseAgent):
             "phase_margin_deg", "load_cap_f", "power_limit_mw"
         ],
         "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"],
+        "bias_current_mirror_precision": ["supply_v", "target_iout_a", "compliance_v"],
+        "bias_current_mirror_high_output_resistance": ["supply_v", "target_iout_a", "compliance_v"],
         "transconductor": ["target_gm_s"],
         "source_follower": ["supply_v"],
         "common_gate_amp": ["supply_v"],
         "amplifier_source_degenerated": ["supply_v", "target_gain_db", "target_bw_hz", "power_limit_mw"],
         "amplifier_active_load": ["supply_v", "target_gain_db", "power_limit_mw"],
         "amplifier_cascode": ["supply_v", "target_gain_db", "power_limit_mw"],
+        "opamp_folded_cascode": ["supply_v", "target_gain_db", "target_ugbw_hz", "load_cap_f", "power_limit_mw"],
         "digital_cmos_gate": ["supply_v"],
         "memory_sram_cell": ["supply_v"],
         "oscillator_lc": ["supply_v"],
         "reference_bandgap": ["supply_v"],
-        "comparator": ["supply_v"]
+        "comparator": ["supply_v", "input_overdrive_v"],
+        "composite_pipeline": ["supply_v"],
     }
 
     REQUIRED_SIZING_KEYS_BY_TOPOLOGY = {
@@ -72,7 +76,11 @@ class ConstraintAgent(BaseAgent):
         "diff_pair": ["W_in", "L_in", "W_tail", "L_tail", "I_tail", "R_load"],
         "bjt_diff_pair": ["I_tail", "Ic_each", "R_C", "gm_each"],
         "current_mirror": ["W_ref", "L_ref", "W_out", "L_out", "I_ref"],
+        "wilson_current_mirror": ["W_ref", "L_ref", "W_out", "L_out", "I_ref"],
+        "cascode_current_mirror": ["W_ref", "L_ref", "W_out", "L_out", "I_ref", "W_cas", "L_cas", "Vbias_cas"],
+        "widlar_current_mirror": ["W_ref", "L_ref", "W_out", "L_out", "I_ref", "R_emitter_deg_ohm"],
         "two_stage_miller": ["Cc_f", "gm1_target_s", "I_stage1_a", "I_stage2_a"],
+        "folded_cascode_opamp": ["gm1_target_s", "I_tail", "R_out_ohm", "dc_gain_linear"],
         "gm_stage": ["gm_target_s", "I_bias_a", "W_m", "L_m"],
         "common_drain": ["W_m", "L_m", "I_bias", "R_source", "Vbias"],
         "common_gate": ["W_m", "L_m", "I_bias", "R_D", "Vbias"],
@@ -84,6 +92,7 @@ class ConstraintAgent(BaseAgent):
         "sram6t_cell": ["W_pullup", "L_pullup", "W_pulldown", "L_pulldown", "W_access", "L_access"],
         "lc_oscillator_cross_coupled": ["W_pair", "L_pair", "L_tank", "C_tank", "I_tail"],
         "bandgap_reference_core": ["I_core", "area_ratio", "R1_ohm", "R2_ohm"],
+        "composite_pipeline": ["stages", "stage_count"],
     }
 
     POSITIVE_CONSTRAINTS_BY_TEMPLATE = {
@@ -96,17 +105,21 @@ class ConstraintAgent(BaseAgent):
         "amplifier_differential_bjt": ["tail_current_a", "collector_res_ohm"],
         "opamp_two_stage": ["supply_v", "target_ugbw_hz", "power_limit_mw"],
         "bias_current_mirror": ["supply_v", "target_iout_a", "compliance_v"],
+        "bias_current_mirror_precision": ["supply_v", "target_iout_a", "compliance_v"],
+        "bias_current_mirror_high_output_resistance": ["supply_v", "target_iout_a", "compliance_v"],
         "transconductor": ["target_gm_s"],
         "source_follower": ["supply_v"],
         "common_gate_amp": ["supply_v"],
         "amplifier_source_degenerated": ["supply_v", "target_bw_hz", "power_limit_mw"],
         "amplifier_active_load": ["supply_v", "power_limit_mw"],
         "amplifier_cascode": ["supply_v", "power_limit_mw"],
+        "opamp_folded_cascode": ["supply_v", "target_ugbw_hz", "load_cap_f", "power_limit_mw"],
         "digital_cmos_gate": ["supply_v"],
         "memory_sram_cell": ["supply_v"],
         "oscillator_lc": ["supply_v"],
         "reference_bandgap": ["supply_v"],
-        "comparator": ["supply_v"]
+        "comparator": ["supply_v", "input_overdrive_v"],
+        "composite_pipeline": ["supply_v"],
     }
 
     def run_agent(self, memory: SharedMemory):
@@ -147,7 +160,7 @@ class ConstraintAgent(BaseAgent):
         required_constraints = self.REQUIRED_CONSTRAINT_KEYS_BY_TEMPLATE.get(template, [])
         required_sizing = self.REQUIRED_SIZING_KEYS_BY_TOPOLOGY.get(topology_key, [])
         case_meta = state.get("case_metadata") or {}
-        if topology_key == "two_stage_miller" and case_meta.get("demo_model") == "behavioral_opamp_proxy":
+        if topology_key == "two_stage_miller" and case_meta.get("demo_model") in {"behavioral_opamp_proxy", "native_telescopic"}:
             required_sizing = ["I_tail", "W_in", "W_cas_n", "W_load_p", "Vbias_n", "Vbias_p"]
 
         for key in required_constraints:
@@ -188,7 +201,15 @@ class ConstraintAgent(BaseAgent):
                 + ", ".join(sorted(irrelevant_targets))
             )
 
-        if topology_key == "rc_lowpass":
+        if topology_key == "composite_pipeline":
+            self._validate_composite_pipeline(
+                issues=issues,
+                warnings=warnings,
+                constraints=constraints,
+                sizing=sizing,
+            )
+
+        elif topology_key == "rc_lowpass":
             R = sizing.get("R_ohm")
             C = sizing.get("C_f")
             fc_target = constraints.get("target_fc_hz")
@@ -266,7 +287,7 @@ class ConstraintAgent(BaseAgent):
             if gm is not None and gm < 1e-4:
                 warnings.append("BJT differential pair gm is low; gain may be limited.")
 
-        elif topology_key == "current_mirror":
+        elif topology_key in {"current_mirror", "wilson_current_mirror", "cascode_current_mirror", "widlar_current_mirror"}:
             compliance_v = constraints.get("compliance_v")
             vov = sizing.get("Vov_target", 0.2)
             if compliance_v is not None and compliance_v < vov:
@@ -276,6 +297,9 @@ class ConstraintAgent(BaseAgent):
             if ratio > 20:
                 warnings.append("Large mirror ratio may be sensitive to mismatch.")
 
+            if topology_key == "widlar_current_mirror" and sizing.get("R_emitter_deg_ohm", 0) <= 0:
+                issues.append("Widlar current mirror requires a positive degeneration resistor.")
+
         elif topology_key == "two_stage_miller":
             cc = sizing.get("Cc_f")
             cl = constraints.get("load_cap_f")
@@ -284,6 +308,14 @@ class ConstraintAgent(BaseAgent):
                 warnings.append("Compensation capacitor may be too small relative to load capacitance.")
             if pm is not None and pm < 50:
                 warnings.append("Requested phase margin is low for a stable design.")
+
+        elif topology_key == "folded_cascode_opamp":
+            if sizing.get("R_out_ohm") is not None and sizing.get("R_out_ohm") < 1e4:
+                warnings.append("Folded-cascode output resistance is low; open-loop gain may be limited.")
+
+        elif topology_key == "comparator":
+            if constraints.get("input_overdrive_v") is not None and constraints.get("input_overdrive_v") <= 0:
+                issues.append("Comparator input_overdrive_v must be > 0.")
 
         elif topology_key == "bandgap_reference_core":
             ratio = sizing.get("R2_ohm", 0.0) / max(sizing.get("R1_ohm", 1.0), 1e-30)
@@ -305,3 +337,40 @@ class ConstraintAgent(BaseAgent):
         memory.write("constraints_report", report.__dict__)
         memory.write("status", DesignStatus.CONSTRAINTS_OK if passed else DesignStatus.CONSTRAINTS_FAILED)
         return state, report
+
+    def _validate_composite_pipeline(self, issues, warnings, constraints, sizing):
+        stages = sizing.get("stages")
+        if not isinstance(stages, list) or len(stages) < 2:
+            issues.append("Composite sizing must include at least two stage entries in sizing['stages'].")
+            return
+
+        stage_count = sizing.get("stage_count")
+        if stage_count is not None:
+            try:
+                if int(stage_count) != len(stages):
+                    warnings.append("sizing.stage_count does not match the number of stage entries.")
+            except Exception:
+                warnings.append("sizing.stage_count should be an integer when present.")
+
+        for idx, stage in enumerate(stages):
+            if not isinstance(stage, dict):
+                issues.append(f"Stage {idx + 1} entry is not a dictionary.")
+                continue
+            topology = stage.get("topology")
+            stage_sizing = stage.get("sizing") or {}
+            if topology not in TOPOLOGY_LIBRARY:
+                issues.append(f"Stage {idx + 1} has unknown topology '{topology}'.")
+                continue
+            if not stage_sizing:
+                issues.append(f"Stage {idx + 1} ({topology}) is missing stage sizing data.")
+                continue
+            required_stage_keys = self.REQUIRED_SIZING_KEYS_BY_TOPOLOGY.get(topology, [])
+            missing = [key for key in required_stage_keys if stage_sizing.get(key) is None]
+            if missing:
+                warnings.append(
+                    f"Stage {idx + 1} ({topology}) is missing some expected sizing fields: "
+                    + ", ".join(missing[:5])
+                )
+
+        if constraints.get("supply_v") is not None and constraints.get("supply_v") <= 0:
+            issues.append("Constraint 'supply_v' must be > 0 for composite pipelines.")

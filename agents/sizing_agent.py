@@ -13,78 +13,55 @@ class SizingReport:
 
 
 class SizingAgent(BaseAgent):
+    def _select_gm_id_target(self, constraints):
+        if constraints.get("gm_id_target_s_per_a") is not None:
+            return float(constraints["gm_id_target_s_per_a"])
+        if float(constraints.get("power_limit_mw", 10.0) or 10.0) <= 1.0:
+            return 16.0
+        if float(constraints.get("target_ugbw_hz", 0.0) or 0.0) >= 10e6:
+            return 8.0
+        return 12.0
+
+    def _annotate_mos_sizing(self, sizing, constraints, current_key, vov_key="Vov_target", ro_current_factor=1.0):
+        current = sizing.get(current_key)
+        vov = sizing.get(vov_key, constraints.get("target_vov_v"))
+        lambda_1_per_v = float(constraints.get("lambda_1_per_v", 0.02))
+        gm_id_target = self._select_gm_id_target(constraints)
+
+        if current is None:
+            return sizing
+
+        current = float(current)
+        sizing["gm_id_target_s_per_a"] = gm_id_target
+        sizing["gm_id_est_s_per_a"] = (2.0 / max(float(vov), 1e-12)) if vov is not None else None
+        sizing["inversion_hint"] = (
+            "moderate" if gm_id_target >= 10.0 and gm_id_target <= 16.0
+            else ("weak-leaning" if gm_id_target > 16.0 else "strong-leaning")
+        )
+        sizing["ro_est_ohm"] = max(
+            float(constraints.get("ro_floor_ohm", 1e4)),
+            1.0 / max(lambda_1_per_v * max(current * ro_current_factor, 1e-12), 1e-12),
+        )
+        sizing["gm_est_s"] = current * sizing["gm_id_est_s_per_a"] if sizing.get("gm_id_est_s_per_a") is not None else None
+        return sizing
+
     def run_agent(self, memory: SharedMemory):
         state = memory.get_full_state()
         constraints = state.get("constraints", {})
         topology = state.get("selected_topology")
+        topology_plan = state.get("topology_plan") or {}
 
         if not topology:
             memory.write("status", DesignStatus.SIZING_FAILED)
             memory.write("sizing_report", SizingReport(False, ["No topology selected"]).__dict__)
             return state
 
-        if topology == "rc_lowpass":
-            state, report = self._size_rc_lowpass(state, constraints)
-
-        elif topology == "rlc_lowpass_2nd_order":
-            state, report = self._size_rlc_lowpass_2nd_order(state, constraints)
-
-        elif topology == "rlc_highpass_2nd_order":
-            state, report = self._size_rlc_highpass_2nd_order(state, constraints)
-
-        elif topology == "rlc_bandpass_2nd_order":
-            state, report = self._size_rlc_bandpass_2nd_order(state, constraints)
-
-        elif topology == "common_source_res_load":
-            state, report = self._size_common_source_res_load(state, constraints)
-
-        elif topology == "diff_pair":
-            state, report = self._size_diff_pair(state, constraints)
-
-        elif topology == "bjt_diff_pair":
-            state, report = self._size_bjt_diff_pair(state, constraints)
-
-        elif topology == "current_mirror":
-            state, report = self._size_current_mirror(state, constraints)
-
-        elif topology == "two_stage_miller":
-            state, report = self._size_two_stage_miller(state, constraints)
-
-        elif topology == "gm_stage":
-            state, report = self._size_gm_stage(state, constraints)
-
-        elif topology == "common_drain":
-            state, report = self._size_common_drain(state, constraints)
-
-        elif topology == "common_gate":
-            state, report = self._size_common_gate(state, constraints)
-
-        elif topology == "source_degenerated_cs":
-            state, report = self._size_source_degenerated_cs(state, constraints)
-
-        elif topology == "common_source_active_load":
-            state, report = self._size_common_source_active_load(state, constraints)
-
-        elif topology == "diode_connected_stage":
-            state, report = self._size_diode_connected_stage(state, constraints)
-
-        elif topology == "cascode_amplifier":
-            state, report = self._size_cascode_amplifier(state, constraints)
-
-        elif topology == "nand2_cmos":
-            state, report = self._size_nand2_cmos(state, constraints)
-
-        elif topology == "sram6t_cell":
-            state, report = self._size_sram6t_cell(state, constraints)
-
-        elif topology == "lc_oscillator_cross_coupled":
-            state, report = self._size_lc_oscillator(state, constraints)
-
-        elif topology == "bandgap_reference_core":
-            state, report = self._size_bandgap_reference(state, constraints)
-
+        if topology == "composite_pipeline" or (topology_plan.get("mode") == "composite"):
+            state, report = self._size_composite_pipeline(state, constraints, topology_plan, memory=memory)
         else:
-            report = SizingReport(False, [f"Sizing not implemented for {topology}"])
+            state, report = self._size_for_topology(topology, state, constraints)
+
+        if not report.success:
             memory.write("status", DesignStatus.SIZING_FAILED)
             memory.write("sizing_report", report.__dict__)
             return state
@@ -93,6 +70,192 @@ class SizingAgent(BaseAgent):
         memory.write("sizing_report", report.__dict__)
         memory.write("status", DesignStatus.SIZING_COMPLETE)
         return state
+
+    def _size_for_topology(self, topology, state, constraints):
+        if topology == "rc_lowpass":
+            return self._size_rc_lowpass(state, constraints)
+        if topology == "rlc_lowpass_2nd_order":
+            return self._size_rlc_lowpass_2nd_order(state, constraints)
+        if topology == "rlc_highpass_2nd_order":
+            return self._size_rlc_highpass_2nd_order(state, constraints)
+        if topology == "rlc_bandpass_2nd_order":
+            return self._size_rlc_bandpass_2nd_order(state, constraints)
+        if topology == "common_source_res_load":
+            return self._size_common_source_res_load(state, constraints)
+        if topology == "diff_pair":
+            return self._size_diff_pair(state, constraints)
+        if topology == "bjt_diff_pair":
+            return self._size_bjt_diff_pair(state, constraints)
+        if topology == "current_mirror":
+            return self._size_current_mirror(state, constraints)
+        if topology == "wilson_current_mirror":
+            return self._size_wilson_current_mirror(state, constraints)
+        if topology == "cascode_current_mirror":
+            return self._size_cascode_current_mirror(state, constraints)
+        if topology == "widlar_current_mirror":
+            return self._size_widlar_current_mirror(state, constraints)
+        if topology == "two_stage_miller":
+            return self._size_two_stage_miller(state, constraints)
+        if topology == "folded_cascode_opamp":
+            return self._size_folded_cascode_opamp(state, constraints)
+        if topology == "gm_stage":
+            return self._size_gm_stage(state, constraints)
+        if topology == "common_drain":
+            return self._size_common_drain(state, constraints)
+        if topology == "common_gate":
+            return self._size_common_gate(state, constraints)
+        if topology == "source_degenerated_cs":
+            return self._size_source_degenerated_cs(state, constraints)
+        if topology == "common_source_active_load":
+            return self._size_common_source_active_load(state, constraints)
+        if topology == "diode_connected_stage":
+            return self._size_diode_connected_stage(state, constraints)
+        if topology == "cascode_amplifier":
+            return self._size_cascode_amplifier(state, constraints)
+        if topology == "nand2_cmos":
+            return self._size_nand2_cmos(state, constraints)
+        if topology == "sram6t_cell":
+            return self._size_sram6t_cell(state, constraints)
+        if topology == "lc_oscillator_cross_coupled":
+            return self._size_lc_oscillator(state, constraints)
+        if topology == "bandgap_reference_core":
+            return self._size_bandgap_reference(state, constraints)
+        if topology == "comparator":
+            return self._size_comparator(state, constraints)
+        return state, SizingReport(False, [f"Sizing not implemented for {topology}"])
+
+    def _size_composite_pipeline(self, state, constraints, topology_plan, memory: SharedMemory = None):
+        stages = (topology_plan or {}).get("stages") or []
+        if len(stages) < 2:
+            return state, SizingReport(False, ["Composite pipeline requires at least two valid stages."])
+
+        llm_hints = self._llm_composite_sizing_hints(stages, constraints, memory=memory)
+        llm_stage_constraints = llm_hints.get("stage_constraints") or []
+        llm_notes = llm_hints.get("notes") or []
+
+        composite_stages = []
+        notes = list(llm_notes)
+        estimated_gain_db = 0.0
+
+        for idx, stage in enumerate(stages):
+            topology = stage.get("topology")
+            if not topology:
+                return state, SizingReport(False, [f"Stage {idx + 1} is missing topology."])
+
+            stage_specific_constraints = stage.get("constraints") or {}
+            stage_constraints = dict(constraints)
+            stage_constraints.update(stage_specific_constraints)
+            if idx < len(llm_stage_constraints) and isinstance(llm_stage_constraints[idx], dict):
+                stage_constraints.update(llm_stage_constraints[idx])
+
+            stage_state = {
+                "case_metadata": state.get("case_metadata") or {},
+                "sizing": {},
+            }
+            stage_state, stage_report = self._size_for_topology(topology, stage_state, stage_constraints)
+            if not stage_report.success:
+                return state, SizingReport(
+                    False,
+                    [f"Stage {idx + 1} sizing failed for topology '{topology}': {', '.join(stage_report.notes)}"],
+                )
+
+            stage_sizing = stage_state.get("sizing") or {}
+            if stage_specific_constraints.get("target_gain_db") is not None:
+                estimated_gain_db += float(stage_specific_constraints.get("target_gain_db"))
+            elif stage_sizing.get("gm_target") is not None and stage_sizing.get("R_D") is not None:
+                gain_vv = max(float(stage_sizing["gm_target"]) * float(stage_sizing["R_D"]), 1e-12)
+                estimated_gain_db += 20.0 * math.log10(gain_vv)
+
+            composite_stages.append(
+                {
+                    "name": stage.get("name") or f"stage{idx + 1}",
+                    "role": stage.get("role") or f"stage_{idx + 1}",
+                    "topology": topology,
+                    "constraints": stage_constraints,
+                    "sizing": stage_sizing,
+                    "notes": list(stage_report.notes),
+                }
+            )
+            notes.append(f"Stage {idx + 1} ({topology}) sized successfully.")
+
+        state["sizing"] = {
+            "stages": composite_stages,
+            "interstage_res_ohm": float(llm_hints.get("interstage_res_ohm", constraints.get("interstage_res_ohm", 2000.0))),
+            "interstage_cap_f": float(llm_hints.get("interstage_cap_f", constraints.get("interstage_cap_f", 0.5e-12))),
+            "estimated_total_gain_db": estimated_gain_db,
+            "stage_count": len(composite_stages),
+        }
+        notes.append(
+            f"Composite sizing complete with {len(composite_stages)} stages "
+            f"(estimated total gain ~ {estimated_gain_db:.2f} dB)."
+        )
+        return state, SizingReport(True, notes)
+
+    def _llm_composite_sizing_hints(self, stages, constraints, memory: SharedMemory = None):
+        if self.llm is None:
+            return {}
+        if constraints.get("enable_llm_stage_sizing", True) is False:
+            return {}
+
+        prompt = f"""
+            You are allocating first-pass sizing intent for a cascaded analog pipeline.
+            Keep suggestions physically plausible and modest.
+
+            Stage plan:
+            {stages}
+
+            Global constraints:
+            {constraints}
+
+            Return JSON only:
+            {{
+              "stage_constraints": [
+                {{"target_gain_db": 12.0, "target_bw_hz": 3000000.0}}
+              ],
+              "interstage_res_ohm": 2000.0,
+              "interstage_cap_f": 5e-13,
+              "notes": ["short note"]
+            }}
+
+            Rules:
+            - stage_constraints length must be <= number of stages
+            - only include numeric values
+            - keep updates conservative (within about 0.5x to 2.0x of global targets)
+            """
+        result = self.llm.generate(prompt)
+        if memory is not None:
+            memory.append_history(
+                "llm_call",
+                {
+                    "agent": "SizingAgent",
+                    "task": "composite_sizing_hints",
+                    "ok": isinstance(result, dict),
+                },
+            )
+        if not isinstance(result, dict):
+            return {}
+
+        stage_constraints = []
+        raw_stage_constraints = result.get("stage_constraints")
+        if isinstance(raw_stage_constraints, list):
+            for item in raw_stage_constraints[: len(stages)]:
+                if not isinstance(item, dict):
+                    stage_constraints.append({})
+                    continue
+                parsed = {}
+                for key, value in item.items():
+                    if isinstance(value, (int, float)):
+                        parsed[str(key)] = float(value)
+                stage_constraints.append(parsed)
+
+        hints = {"stage_constraints": stage_constraints}
+        for key in ("interstage_res_ohm", "interstage_cap_f"):
+            value = result.get(key)
+            if isinstance(value, (int, float)) and float(value) > 0:
+                hints[key] = float(value)
+        if isinstance(result.get("notes"), list):
+            hints["notes"] = [str(item) for item in result.get("notes")[:3]]
+        return hints
 
     def _size_rc_lowpass(self, state, constraints):
         fc = float(constraints.get("target_fc_hz", 1e3))
@@ -261,6 +424,7 @@ class SizingAgent(BaseAgent):
             "Vov_target": target_vov_v,
             "Vout_q_target": vout_q
         }
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_bias")
 
         return state, SizingReport(
             True,
@@ -295,6 +459,7 @@ class SizingAgent(BaseAgent):
             "R_load": R_load,
             "Vov_target": Vov
         }
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_tail", ro_current_factor=0.5)
         return state, SizingReport(True, ["MOS differential pair initial sizing complete"])
 
     def _size_bjt_diff_pair(self, state, constraints):
@@ -342,11 +507,37 @@ class SizingAgent(BaseAgent):
             "Vov_target": Vov,
             "compliance_v_est": Vov
         }
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_ref")
         return state, SizingReport(True, ["Current mirror sized from target current and ratio"])
+
+    def _size_wilson_current_mirror(self, state, constraints):
+        state, report = self._size_current_mirror(state, constraints)
+        state["sizing"]["W_aux"] = state["sizing"]["W_ref"]
+        state["sizing"]["L_aux"] = state["sizing"]["L_ref"]
+        report.notes.append("Wilson mirror adds a third matched feedback device for improved current-copy accuracy.")
+        return state, report
+
+    def _size_cascode_current_mirror(self, state, constraints):
+        state, report = self._size_current_mirror(state, constraints)
+        l_cas = float(constraints.get("L_cas_m", state["sizing"]["L_ref"]))
+        state["sizing"]["W_cas"] = 1.2 * state["sizing"]["W_ref"]
+        state["sizing"]["L_cas"] = l_cas
+        state["sizing"]["Vbias_cas"] = float(constraints.get("Vbias_cas_v", 0.9))
+        report.notes.append("Cascode mirror adds cascode device sizing for higher output resistance.")
+        return state, report
+
+    def _size_widlar_current_mirror(self, state, constraints):
+        state, report = self._size_current_mirror(state, constraints)
+        target_i = float(constraints.get("target_iout_a", 20e-6))
+        vt = float(constraints.get("thermal_voltage_v", 0.02585))
+        beta = float(constraints.get("widlar_beta", 1.0))
+        state["sizing"]["R_emitter_deg_ohm"] = max(100.0, vt * math.log(max(beta, 1.0001) + 1.0) / max(target_i, 1e-12))
+        report.notes.append("Widlar mirror adds source degeneration to realize lower output current.")
+        return state, report
 
     def _size_two_stage_miller(self, state, constraints):
         case_meta = state.get("case_metadata") or {}
-        if case_meta.get("demo_model") == "behavioral_opamp_proxy":
+        if case_meta.get("demo_model") in {"behavioral_opamp_proxy", "native_telescopic"}:
             return self._size_telescopic_cascode_opamp(state, constraints)
 
         ugbw = float(constraints.get("target_ugbw_hz", 1e6))
@@ -369,6 +560,7 @@ class SizingAgent(BaseAgent):
             "supply_v": supply_v,
             "stage_gain_linear": stage_gain_linear,
         }
+        state["sizing"]["gm_id_target_s_per_a"] = self._select_gm_id_target(constraints)
         return state, SizingReport(True, ["Two-stage Miller op-amp initial sizing from UGBW and slew-rate"])
 
     def _size_telescopic_cascode_opamp(self, state, constraints):
@@ -407,12 +599,42 @@ class SizingAgent(BaseAgent):
             "Vicm_v": float(constraints.get("vin_cm_dc", 0.9)),
             "power_target_mw": 1000.0 * vdd * i_tail,
         }
+        state["sizing"]["gm_id_target_s_per_a"] = self._select_gm_id_target(constraints)
         return state, SizingReport(
             True,
             [
                 "Telescopic cascode OTA sized from UGBW, load capacitance, and power limit.",
                 f"Tail current target ≈ {i_tail:.3e} A.",
                 f"Input-pair gm target ≈ {gm_in:.3e} S.",
+            ],
+        )
+
+    def _size_folded_cascode_opamp(self, state, constraints):
+        target_ugbw = float(constraints.get("target_ugbw_hz", 20e6))
+        target_gain_db = float(constraints.get("target_gain_db", 65.0))
+        load_cap = float(constraints.get("load_cap_f", 1e-12))
+        vdd = float(constraints.get("supply_v", 1.8))
+        power_limit_mw = float(constraints.get("power_limit_mw", 2.0))
+        gm1 = max(2.0 * math.pi * target_ugbw * load_cap, 0.5e-3)
+        max_bias_a = power_limit_mw / 1000.0 / max(vdd, 1e-9)
+        i_tail = max(40e-6, min(max_bias_a, 0.4 * gm1))
+        dc_gain_linear = max(10 ** (target_gain_db / 20.0), 100.0)
+        r_out = dc_gain_linear / max(gm1, 1e-12)
+        state["sizing"] = {
+            "gm1_target_s": gm1,
+            "I_tail": i_tail,
+            "R_out_ohm": r_out,
+            "dc_gain_linear": dc_gain_linear,
+            "Vcm_ref": float(constraints.get("vin_cm_dc", 0.9)),
+            "output_cm_v": float(constraints.get("target_vout_q_v", 0.9)),
+        }
+        state["sizing"]["gm_id_target_s_per_a"] = self._select_gm_id_target(constraints)
+        return state, SizingReport(
+            True,
+            [
+                "Folded-cascode OTA proxy sized from target UGBW, gain, load capacitance, and power.",
+                f"gm target ≈ {gm1:.3e} S.",
+                f"Estimated output resistance ≈ {r_out:.3e} ohm.",
             ],
         )
 
@@ -433,6 +655,7 @@ class SizingAgent(BaseAgent):
             "L_m": L,
             "Vov_target_v": Vov
         }
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_bias_a", vov_key="Vov_target_v")
         return state, SizingReport(True, ["GM stage sized from gm and Vov"])
 
     def _size_common_drain(self, state, constraints):
@@ -455,6 +678,7 @@ class SizingAgent(BaseAgent):
             "Vout_q_target": target_vout_q,
             "Vin_bias": min(vdd - 0.05, target_vout_q + vth + Vov),
         }
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_bias")
         return state, SizingReport(True, ["Common-drain source follower initial sizing complete"])
 
     def _size_common_gate(self, state, constraints):
@@ -474,6 +698,8 @@ class SizingAgent(BaseAgent):
             "Vbias": min(vdd - 0.2, 1.0),
             "gm_target": gm_target,
         }
+        state["sizing"]["Vov_target"] = Vov
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_bias")
         return state, SizingReport(True, ["Common-gate initial sizing complete"])
 
     def _size_source_degenerated_cs(self, state, constraints):
@@ -508,6 +734,8 @@ class SizingAgent(BaseAgent):
             "Vin_bias": 0.5 + Vov_n,
             "target_vout_q": 0.9,
         }
+        state["sizing"]["Vov_target"] = Vov_n
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_bias")
         return state, SizingReport(True, ["Common-source with PMOS active load sized from current target"])
 
     def _size_diode_connected_stage(self, state, constraints):
@@ -531,6 +759,8 @@ class SizingAgent(BaseAgent):
             "Vin_bias": min(vdd - 0.1, 0.55 + Vov_n),
             "target_vout_q": 0.9,
         }
+        state["sizing"]["Vov_target"] = Vov_n
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_bias")
         report = SizingReport(True, ["Diode-connected MOS amplifier sized with weaker PMOS load to target moderate gain."])
         return state, report
 
@@ -552,7 +782,9 @@ class SizingAgent(BaseAgent):
             "R_D": rd,
             "I_bias": id_bias,
             "Vbias_cas": 0.9,
+            "Vov_target": Vov,
         }
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_bias")
         return state, SizingReport(True, ["Cascode amplifier first-pass sizing complete"])
 
     def _size_nand2_cmos(self, state, constraints):
@@ -599,7 +831,9 @@ class SizingAgent(BaseAgent):
             "C_tank": C_tank,
             "I_tail": I_tail,
             "R_tank_loss": float(constraints.get("r_tank_loss_ohm", 10000.0)),
+            "Vov_target": Vov,
         }
+        self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_tail", ro_current_factor=0.5)
         return state, SizingReport(True, ["Cross-coupled LC oscillator tank values computed"])
 
     def _size_bandgap_reference(self, state, constraints):
@@ -618,4 +852,25 @@ class SizingAgent(BaseAgent):
             "R2_ohm": r2,
         }
         return state, SizingReport(True, ["Bandgap reference sized from target Vref and area ratio"])
+
+    def _size_comparator(self, state, constraints):
+        vdd = float(constraints.get("supply_v", 1.8))
+        overdrive = float(constraints.get("input_overdrive_v", 10e-3))
+        regen_tau = float(constraints.get("target_decision_tau_s", 1e-9))
+        load_cap = float(constraints.get("load_cap_f", 50e-15))
+        gm_lat = max(load_cap / max(regen_tau, 1e-15), 0.5e-3)
+        state["sizing"] = {
+            "gm_latch_s": gm_lat,
+            "input_overdrive_v": overdrive,
+            "vcm_v": float(constraints.get("vicm_v", 0.5 * vdd)),
+            "load_cap_f": load_cap,
+            "tail_current_a": max(50e-6, gm_lat * 0.1),
+        }
+        return state, SizingReport(
+            True,
+            [
+                "Comparator proxy sized from input overdrive, decision time target, and load capacitance.",
+                f"Estimated regenerative gm ≈ {gm_lat:.3e} S.",
+            ],
+        )
     

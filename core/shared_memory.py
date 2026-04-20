@@ -10,6 +10,8 @@ class SharedMemory:
         self.state = {
             "specification": None,
             "selected_topology": None,
+            "selected_topologies": None,
+            "topology_plan": None,
             "topology_metadata": None,
             "constraints": None,
             "sizing": None,
