@@ -11,6 +11,14 @@ from html import escape
 from datetime import datetime
 from core.analog_defaults import ANALOG_DEFAULTS
 from core.demo_catalog import slugify_label
+from core.simulation_plan import build_simulation_plan
+from core.topology_aliases import canonical_topology_key
+from core.verification_pipeline import (
+    build_final_status_summary,
+    build_structured_verification,
+    collect_analysis_metrics,
+    write_artifact_bundle,
+)
 
 from agents.base_agent import BaseAgent
 from agents.design_status import DesignStatus
@@ -26,6 +34,10 @@ class SimulationAgent(BaseAgent):
         "rlc_bandpass_2nd_order",
         "common_source_res_load",
         "diff_pair",
+        "diff_pair_resistor_load",
+        "diff_pair_current_mirror_load",
+        "diff_pair_active_load",
+        "bjt_diff_pair",
         "two_stage_miller",
         "folded_cascode_opamp",
         "gm_stage",
@@ -35,15 +47,22 @@ class SimulationAgent(BaseAgent):
         "common_source_active_load",
         "diode_connected_stage",
         "cascode_amplifier",
+        "transimpedance_frontend",
+        "current_sense_amp_helper",
     }
 
-    def __init__(self, llm=None, ngspice_path=None, max_retries=1, wait=0):
-        super().__init__(llm=llm, max_retries=max_retries, wait=wait)
-        self.ngspice_path = ngspice_path or os.getenv("NGSPICE_PATH") or self._find_ngspice()
+    def __init__(self, llm=None, reference_catalog=None, ngspice_path=None, max_retries=1, wait=0):
+        super().__init__(llm=llm, reference_catalog=reference_catalog, max_retries=max_retries, wait=wait)
+        configured = ngspice_path or os.getenv("NGSPICE_PATH")
+        if configured and os.path.exists(configured):
+            self.ngspice_path = configured
+        else:
+            self.ngspice_path = self._find_ngspice()
 
     def run_agent(self, memory: SharedMemory):
         netlist = memory.read("netlist")
         topology = memory.read("selected_topology")
+        topology_eval = self._analysis_topology(topology)
         sizing = memory.read("sizing") or {}
         constraints = self._merged_constraints(memory)
 
@@ -52,16 +71,18 @@ class SimulationAgent(BaseAgent):
             memory.write("simulation_error", "Missing netlist")
             return None
 
-        if not self.ngspice_path:
-            memory.write("status", DesignStatus.SIMULATION_FAILED)
-            memory.write("simulation_error", "ngspice not found")
-            return None
-
         run_id = self._build_run_id(memory, topology)
         base_dir = os.path.join("artifacts", "simulations", run_id)
         os.makedirs(base_dir, exist_ok=True)
         case_meta = memory.read("case_metadata") or {}
-        simulation_plan = case_meta.get("simulation_plan") or {}
+        simulation_plan = build_simulation_plan(
+            topology=topology,
+            constraints=constraints,
+            override=case_meta.get("simulation_plan") or {},
+        )
+        force_skip_simulation = bool(case_meta.get("force_skip_simulation")) or (
+            os.getenv("I13_FORCE_SKIP_SIMULATION", "0").strip() == "1"
+        )
         planned_analyses = set(simulation_plan.get("analyses") or [])
         manifest = {
             "case_key": case_meta.get("case_key"),
@@ -72,6 +93,7 @@ class SimulationAgent(BaseAgent):
             "analyses": simulation_plan.get("analyses", []),
             "intent": simulation_plan.get("intent"),
             "primary_metrics": simulation_plan.get("primary_metrics", []),
+            "simulation_plan": simulation_plan,
         }
         self._safe_write_text(
             os.path.join(base_dir, "run_manifest.json"),
@@ -81,6 +103,61 @@ class SimulationAgent(BaseAgent):
         saved_netlist_path = os.path.join(base_dir, "generated.sp")
         with open(saved_netlist_path, "w") as f:
             f.write(netlist)
+        analysis_data = {}
+
+        if force_skip_simulation or not self.ngspice_path:
+            if force_skip_simulation:
+                skip_reason = (
+                    case_meta.get("skip_simulation_reason")
+                    or "Simulation was intentionally skipped for backup showcase mode. "
+                    "Topology, sizing, and netlist artifacts were still generated."
+                )
+            else:
+                skip_reason = (
+                    "ngspice not found; simulation stage was skipped. "
+                    "Topology, sizing, and netlist artifacts were still generated."
+                )
+            verification_summary = self._build_skipped_verification_summary(skip_reason)
+            sim = {
+                "stdout": "",
+                "stderr": "",
+                "returncode": None,
+                "saved_netlist_path": saved_netlist_path,
+                "artifact_dir": base_dir,
+                "ngspice_path": self.ngspice_path,
+                "analyses": simulation_plan.get("analyses", []),
+                "intent": simulation_plan.get("intent"),
+                "simulation_skipped": True,
+                "skip_reason": skip_reason,
+                "simulation_provenance": (
+                    "Skipped ngspice execution by showcase runtime request; metrics unavailable."
+                    if force_skip_simulation
+                    else "Skipped ngspice execution; metrics unavailable."
+                ),
+                "plot_validations": [],
+                "plot_validation_summary": {
+                    "passes": 0,
+                    "fails": 1,
+                    "warnings": 0,
+                    "overall_pass": False,
+                },
+                "netlist_stage_report": memory.read("netlist_stage_report"),
+            }
+            return self._finalize_simulation_outputs(
+                memory=memory,
+                topology=topology,
+                topology_eval=topology_eval,
+                sizing=sizing,
+                constraints=constraints,
+                sim=sim,
+                simulation_plan=simulation_plan,
+                analysis_data=analysis_data,
+                verification_summary=verification_summary,
+                verification_reference_summary={"used": [], "added_checks": []},
+                base_dir=base_dir,
+                log_text="",
+                status=DesignStatus.SIMULATION_COMPLETE,
+            )
 
         result = subprocess.run(
             [self.ngspice_path, "-b", "-o", "ngspice.log", "generated.sp"],
@@ -109,14 +186,33 @@ class SimulationAgent(BaseAgent):
         log_path = os.path.join(base_dir, "ngspice.log")
 
         if result.returncode != 0:
-            memory.write("simulation_results", sim)
-            memory.write("status", DesignStatus.SIMULATION_FAILED)
-            return sim
+            verification_summary = self._build_skipped_verification_summary(
+                "ngspice execution failed before the planned analyses completed."
+            )
+            return self._finalize_simulation_outputs(
+                memory=memory,
+                topology=topology,
+                topology_eval=topology_eval,
+                sizing=sizing,
+                constraints=constraints,
+                sim=sim,
+                simulation_plan=simulation_plan,
+                analysis_data=analysis_data,
+                verification_summary=verification_summary,
+                verification_reference_summary={"used": [], "added_checks": []},
+                base_dir=base_dir,
+                log_text=self._read_text(log_path),
+                status=DesignStatus.SIMULATION_FAILED,
+            )
 
         ac_csv = os.path.join(base_dir, "ac_out.csv")
+        ac_phase_csv = os.path.join(base_dir, "ac_phase.csv")
         dc_csv = os.path.join(base_dir, "dc_out.csv")
         tran_in_csv = os.path.join(base_dir, "tran_in.csv")
         tran_out_csv = os.path.join(base_dir, "tran_out.csv")
+        ac_data = None
+        ac_phase_data = None
+        dc_data = None
 
         # -------------------------
         # AC artifacts
@@ -126,6 +222,7 @@ class SimulationAgent(BaseAgent):
             sim["ac_preview"] = self._preview_file(ac_csv, max_lines=8)
 
             ac_data = self._read_ngspice_ac(ac_csv)
+            analysis_data["ac_data"] = ac_data
             ac_validation = self._validate_xy_data(
                 name="ac_dataset",
                 data=ac_data,
@@ -139,8 +236,17 @@ class SimulationAgent(BaseAgent):
                 sim["ac_points"] = len(ac_data["x"])
                 ac_plot = os.path.join(base_dir, "ac_plot.svg")
                 input_ac_mag = float(constraints.get("vin_ac", 1.0))
-                if topology == "diff_pair":
+                if topology_eval in {
+                    "diff_pair",
+                    "diff_pair_resistor_load",
+                    "diff_pair_current_mirror_load",
+                    "diff_pair_active_load",
+                    "current_sense_amp_helper",
+                }:
                     input_ac_mag *= 2.0
+                elif topology_eval == "transimpedance_frontend":
+                    input_ac_mag = float(constraints.get("sensor_ac_a", 1e-6))
+                analysis_data["input_ac_mag"] = input_ac_mag
                 self._plot_ac(ac_data, ac_plot, input_ac_mag=input_ac_mag)
                 sim["ac_plot"] = ac_plot
                 sim["plot_validations"].append(self._validate_plot_file("ac_plot", ac_plot))
@@ -158,14 +264,14 @@ class SimulationAgent(BaseAgent):
                 if ugbw_hz is not None:
                     sim["ugbw_hz"] = ugbw_hz
 
-                if topology in {"rc_lowpass", "rlc_lowpass_2nd_order"}:
+                if topology_eval in {"rc_lowpass", "rlc_lowpass_2nd_order"}:
                     sim["fc_hz_from_ac"] = self._estimate_cutoff_from_ac(ac_data)
-                elif topology == "rlc_highpass_2nd_order":
+                elif topology_eval == "rlc_highpass_2nd_order":
                     sim["fc_hz_from_ac"] = self._estimate_highpass_cutoff_from_ac(
                         ac_data,
                         input_ac_mag=input_ac_mag,
                     )
-                elif topology == "rlc_bandpass_2nd_order":
+                elif topology_eval == "rlc_bandpass_2nd_order":
                     sim.update(
                         self._estimate_bandpass_metrics_from_ac(
                             ac_data,
@@ -176,6 +282,10 @@ class SimulationAgent(BaseAgent):
                 sim["parser_warning"] = (
                     "AC file was created, but parser could not extract usable AC points."
                 )
+            if os.path.exists(ac_phase_csv):
+                sim["ac_phase_csv"] = ac_phase_csv
+                ac_phase_data = self._read_wrdata_xy(ac_phase_csv)
+                analysis_data["ac_phase_data"] = ac_phase_data
         elif "ac" in planned_analyses:
             sim["plot_validations"].append(
                 {
@@ -185,8 +295,8 @@ class SimulationAgent(BaseAgent):
                     "warnings": [],
                 }
             )
-        elif topology in self.AC_EXPECTED_TOPOLOGIES:
-            if topology == "rc_lowpass":
+        elif topology_eval in self.AC_EXPECTED_TOPOLOGIES:
+            if topology_eval == "rc_lowpass":
                 sim["parser_warning"] = (
                     "ac_out.csv was not created by ngspice; using formula-based cutoff."
                 )
@@ -203,6 +313,7 @@ class SimulationAgent(BaseAgent):
             sim["dc_preview"] = self._preview_file(dc_csv, max_lines=8)
 
             dc_data = self._read_wrdata_xy(dc_csv)
+            analysis_data["dc_data"] = dc_data
             sim["plot_validations"].append(
                 self._validate_xy_data(
                     name="dc_dataset",
@@ -234,18 +345,21 @@ class SimulationAgent(BaseAgent):
         tran_series = {}
         tran_in_data = None
         tran_out_data = None
+        tran_outn_data = None
         tran_qb_data = None
         tran_diff_data = None
 
         if os.path.exists(tran_in_csv):
             sim["tran_in_csv"] = tran_in_csv
             tran_in_data = self._read_wrdata_xy(tran_in_csv)
+            analysis_data["tran_in_data"] = tran_in_data
             tran_series["V(in)"] = tran_in_data
 
         if os.path.exists(tran_out_csv):
             sim["tran_out_csv"] = tran_out_csv
             sim["tran_preview"] = self._preview_file(tran_out_csv, max_lines=5)
             tran_out_data = self._read_wrdata_xy(tran_out_csv)
+            analysis_data["tran_out_data"] = tran_out_data
             tran_series["V(out)"] = tran_out_data
 
         extra_tran_specs = [
@@ -262,6 +376,9 @@ class SimulationAgent(BaseAgent):
             if os.path.exists(candidate):
                 sim[sim_key] = candidate
                 tran_series[label] = self._read_wrdata_xy(candidate)
+                if sim_key == "tran_outn_csv":
+                    tran_outn_data = tran_series[label]
+                    analysis_data["tran_outn_data"] = tran_outn_data
 
         tran_qb_csv = os.path.join(base_dir, "tran_qb.csv")
         if os.path.exists(tran_qb_csv):
@@ -273,6 +390,7 @@ class SimulationAgent(BaseAgent):
         if os.path.exists(tran_diff_csv):
             sim["tran_diff_csv"] = tran_diff_csv
             tran_diff_data = self._read_wrdata_xy(tran_diff_csv)
+            analysis_data["tran_diff_data"] = tran_diff_data
             tran_series["V(outp,outn)"] = tran_diff_data
 
         if tran_out_data and tran_out_data["x"] and tran_out_data["y"]:
@@ -317,7 +435,7 @@ class SimulationAgent(BaseAgent):
             if device_metrics:
                 sim["device_metrics"] = device_metrics
 
-            if topology in {
+            if topology_eval in {
                 "current_mirror",
                 "wilson_current_mirror",
                 "cascode_current_mirror",
@@ -327,7 +445,7 @@ class SimulationAgent(BaseAgent):
                 if sim_i is not None:
                     sim["iout_a"] = abs(sim_i)
 
-            if topology == "bandgap_reference_core":
+            if topology_eval == "bandgap_reference_core":
                 vref = self._extract_named_voltage_from_log(sim.get("log_preview"), "v(ref)")
                 if vref is not None:
                     sim["vref_v"] = vref
@@ -336,7 +454,7 @@ class SimulationAgent(BaseAgent):
             if supply_i is not None:
                 sim["supply_current_a"] = abs(supply_i)
 
-            if topology in (
+            if topology_eval in (
                 "common_source_res_load",
                 "source_degenerated_cs",
                 "common_source_active_load",
@@ -345,13 +463,18 @@ class SimulationAgent(BaseAgent):
                 "common_drain",
                 "common_gate",
                 "diff_pair",
+                "diff_pair_resistor_load",
+                "diff_pair_current_mirror_load",
+                "diff_pair_active_load",
+                "current_sense_amp_helper",
+                "transimpedance_frontend",
                 "two_stage_miller",
                 "folded_cascode_opamp",
                 "bandgap_reference_core",
             ):
                 sim["op_summary"] = self._extract_op_region_summary(sim.get("log_preview"))
 
-            if topology == "lc_oscillator_cross_coupled":
+            if topology_eval == "lc_oscillator_cross_coupled":
                 aborted = any("aborted" in (line or "").lower() for line in sim.get("log_preview", []))
                 if aborted:
                     sim["parser_warning"] = (
@@ -362,7 +485,7 @@ class SimulationAgent(BaseAgent):
         # -------------------------
         # RC cutoff logic
         # -------------------------
-            if topology == "rc_lowpass":
+            if topology_eval == "rc_lowpass":
                 fc_formula = self._formula_fc_from_sizing(sizing)
                 sim["fc_hz_formula"] = fc_formula
 
@@ -388,7 +511,7 @@ class SimulationAgent(BaseAgent):
                 else:
                     sim["fc_hz"] = fc_ac
 
-            if topology in {"rlc_lowpass_2nd_order", "rlc_highpass_2nd_order"}:
+            if topology_eval in {"rlc_lowpass_2nd_order", "rlc_highpass_2nd_order"}:
                 sim.pop("gain_db", None)
                 sim.pop("bandwidth_hz", None)
                 sim["fc_hz"] = sim.get("fc_hz_from_ac") or sizing.get("target_fc_hz")
@@ -397,7 +520,7 @@ class SimulationAgent(BaseAgent):
                 sim["rolloff_db_per_dec"] = sizing.get("rolloff_db_per_dec")
                 sim["response_family"] = sizing.get("response_family")
 
-            if topology == "rlc_bandpass_2nd_order":
+            if topology_eval == "rlc_bandpass_2nd_order":
                 sim.pop("gain_db", None)
                 sim.setdefault("center_hz", sizing.get("target_center_hz"))
                 sim.setdefault("bandwidth_hz", sizing.get("target_bw_hz"))
@@ -406,7 +529,7 @@ class SimulationAgent(BaseAgent):
                 sim["rolloff_db_per_dec"] = sizing.get("rolloff_db_per_dec")
                 sim["response_family"] = sizing.get("response_family")
             
-            if topology in (
+            if topology_eval in (
                 "common_source_res_load",
                 "source_degenerated_cs",
                 "common_source_active_load",
@@ -414,6 +537,7 @@ class SimulationAgent(BaseAgent):
                 "cascode_amplifier",
                 "common_drain",
                 "common_gate",
+                "transimpedance_frontend",
             ):
                 vdd = memory.read("constraints").get("supply_v")
                 supply_i = sim.get("supply_current_a")
@@ -422,17 +546,24 @@ class SimulationAgent(BaseAgent):
                 if vdd is not None and current_for_power is not None:
                     sim["power_mw"] = 1000.0 * float(vdd) * float(current_for_power)
 
-            if topology in {"diff_pair", "two_stage_miller"}:
+            if topology_eval in {
+                "diff_pair",
+                "diff_pair_resistor_load",
+                "diff_pair_current_mirror_load",
+                "diff_pair_active_load",
+                "current_sense_amp_helper",
+                "two_stage_miller",
+            }:
                 vdd = memory.read("constraints").get("supply_v")
                 supply_i = sim.get("supply_current_a")
                 if vdd is not None and supply_i is not None and supply_i > 0:
                     sim["power_mw"] = 1000.0 * float(vdd) * float(supply_i)
-                elif topology == "two_stage_miller":
+                elif topology_eval == "two_stage_miller":
                     fallback_i = float(sizing.get("I_stage1_a", 0.0)) + float(sizing.get("I_stage2_a", 0.0))
                     if fallback_i > 0:
                         sim["power_mw"] = 1000.0 * float(vdd) * fallback_i
 
-            if topology == "folded_cascode_opamp":
+            if topology_eval == "folded_cascode_opamp":
                 vdd = memory.read("constraints").get("supply_v")
                 supply_i = sim.get("supply_current_a")
                 fallback_i = float(sizing.get("I_tail", 0.0))
@@ -441,7 +572,7 @@ class SimulationAgent(BaseAgent):
                 elif vdd is not None and fallback_i > 0:
                     sim["power_mw"] = 1000.0 * float(vdd) * fallback_i
 
-            if topology == "composite_pipeline":
+            if topology_eval == "composite_pipeline":
                 vdd = memory.read("constraints").get("supply_v")
                 supply_i = sim.get("supply_current_a")
                 if vdd is not None and supply_i is not None and supply_i > 0:
@@ -473,7 +604,7 @@ class SimulationAgent(BaseAgent):
                 if isinstance(sizing.get("stages"), list):
                     sim["composite_stage_count"] = len(sizing.get("stages"))
 
-            if topology == "bandgap_reference_core":
+            if topology_eval == "bandgap_reference_core":
                 vdd = memory.read("constraints").get("supply_v")
                 supply_i = sim.get("supply_current_a")
                 if vdd is not None and supply_i is not None:
@@ -485,7 +616,7 @@ class SimulationAgent(BaseAgent):
                 sim["power_margin_mw"] = float(power_limit_mw) - float(sim["power_mw"])
                 sim["power_limit_ok"] = sim["power_mw"] <= float(power_limit_mw)
 
-            if topology == "lc_oscillator_cross_coupled":
+            if topology_eval == "lc_oscillator_cross_coupled":
                 osc_data = tran_diff_data or tran_out_data
                 f_osc = self._estimate_oscillation_frequency(osc_data)
                 if f_osc is not None:
@@ -495,7 +626,7 @@ class SimulationAgent(BaseAgent):
                     if f_formula is not None:
                         sim["oscillation_hz"] = f_formula
 
-            if topology == "sram6t_cell":
+            if topology_eval == "sram6t_cell":
                 vdd = float(memory.read("constraints").get("supply_v", 1.2))
                 q_final = self._last_value(tran_out_data)
                 qb_final = self._last_value(tran_qb_data)
@@ -506,12 +637,12 @@ class SimulationAgent(BaseAgent):
                 if q_final is not None and qb_final is not None:
                     sim["write_ok"] = (q_final > 0.7 * vdd) and (qb_final < 0.3 * vdd)
 
-            if topology == "bandgap_reference_core" and sim.get("vref_v") is None:
+            if topology_eval == "bandgap_reference_core" and sim.get("vref_v") is None:
                 vref = self._last_value(tran_out_data)
                 if vref is not None:
                     sim["vref_v"] = vref
 
-            if topology == "comparator":
+            if topology_eval == "comparator":
                 comparator_metrics = self._extract_comparator_metrics(
                     tran_in_data,
                     tran_out_data,
@@ -519,7 +650,7 @@ class SimulationAgent(BaseAgent):
                 )
                 sim.update(comparator_metrics)
 
-            if topology == "nand2_cmos" and tran_out_data and tran_out_data.get("y"):
+            if topology_eval == "nand2_cmos" and tran_out_data and tran_out_data.get("y"):
                 vout = [float(v) for v in tran_out_data["y"]]
                 sim["logic_low_v"] = min(vout)
                 sim["logic_high_v"] = max(vout)
@@ -528,17 +659,114 @@ class SimulationAgent(BaseAgent):
             sim["plot_validation_summary"] = self._summarize_plot_validations(sim.get("plot_validations", []))
 
             verification_summary = self._build_verification_summary(
-                topology=topology,
+                topology=topology_eval,
                 sizing=sizing,
                 constraints=memory.read("constraints") or {},
                 sim=sim,
             )
-            sim["verification_summary"] = verification_summary
-            memory.write("verification_summary", verification_summary)
-                    
-            memory.write("simulation_results", sim)
-            memory.write("status", DesignStatus.SIMULATION_COMPLETE)
-            return sim
+            verification_summary, verification_reference_summary = self._augment_verification_with_references(
+                memory,
+                topology=topology_eval,
+                sizing=sizing,
+                constraints=memory.read("constraints") or {},
+                sim=sim,
+                summary=verification_summary,
+            )
+            return self._finalize_simulation_outputs(
+                memory=memory,
+                topology=topology,
+                topology_eval=topology_eval,
+                sizing=sizing,
+                constraints=constraints,
+                sim=sim,
+                simulation_plan=simulation_plan,
+                analysis_data=analysis_data,
+                verification_summary=verification_summary,
+                verification_reference_summary=verification_reference_summary,
+                base_dir=base_dir,
+                log_text=self._read_text(log_path),
+                status=DesignStatus.SIMULATION_COMPLETE,
+            )
+
+    def _read_text(self, path):
+        if not path or not os.path.exists(path):
+            return ""
+        try:
+            with open(path, "r") as handle:
+                return handle.read()
+        except Exception:
+            return ""
+
+    def _finalize_simulation_outputs(
+        self,
+        memory: SharedMemory,
+        topology,
+        topology_eval,
+        sizing,
+        constraints,
+        sim,
+        simulation_plan,
+        analysis_data=None,
+        verification_summary=None,
+        verification_reference_summary=None,
+        base_dir=None,
+        log_text="",
+        status=DesignStatus.SIMULATION_COMPLETE,
+    ):
+        analysis_metrics = collect_analysis_metrics(
+            topology=topology_eval,
+            plan=simulation_plan,
+            constraints=constraints,
+            sizing=sizing,
+            sim=sim,
+            analysis_data=analysis_data or {},
+            op_point_results=memory.read("op_point_results") or {},
+            log_text=log_text,
+        )
+        summary = build_structured_verification(
+            topology=topology_eval,
+            plan=simulation_plan,
+            constraints=constraints,
+            sizing=sizing,
+            sim=sim,
+            legacy_summary=verification_summary or {},
+            analysis_metrics=analysis_metrics,
+            log_text=log_text,
+        )
+        final_status_summary = build_final_status_summary(
+            topology=topology_eval,
+            plan=simulation_plan,
+            sim=sim,
+            verification_summary=summary,
+        )
+
+        sim["simulation_plan"] = simulation_plan
+        sim["analysis_metrics"] = analysis_metrics
+        sim["verification_summary"] = summary
+        sim["final_status_summary"] = final_status_summary
+
+        artifact_manifest = write_artifact_bundle(
+            base_dir=base_dir or sim.get("artifact_dir"),
+            sim=sim,
+            analysis_metrics=analysis_metrics,
+            verification_summary=summary,
+            final_status_summary=final_status_summary,
+        )
+        sim["artifact_manifest"] = artifact_manifest
+        reports_dir = os.path.join(base_dir or sim.get("artifact_dir"), "reports")
+        self._safe_write_text(
+            os.path.join(reports_dir, "simulation_result.json"),
+            self._to_json(sim),
+        )
+
+        memory.write(
+            "verification_reference_summary",
+            verification_reference_summary or {"used": [], "added_checks": []},
+        )
+        memory.write("verification_summary", summary)
+        memory.write("simulation_results", sim)
+        memory.write("status", status)
+        return sim
 
     def _find_ngspice(self):
         candidates = [
@@ -550,6 +778,15 @@ class SimulationAgent(BaseAgent):
             if path and os.path.exists(path):
                 return path
         return None
+
+    def _analysis_topology(self, topology: str):
+        canonical = canonical_topology_key(topology)
+        special = {
+            "diff_pair_resistor_load": "diff_pair_resistor_load",
+            "wide_swing_current_mirror": "cascode_current_mirror",
+            "static_comparator": "comparator",
+        }
+        return special.get(topology, canonical)
 
     def _build_run_id(self, memory: SharedMemory, topology: str):
         case_meta = memory.read("case_metadata") or {}
@@ -1453,7 +1690,157 @@ class SimulationAgent(BaseAgent):
         check["status"] = "pass" if (pass_rel or pass_abs) else "fail"
         return check
 
+    def _build_skipped_verification_summary(self, reason: str):
+        return {
+            "target_checks": [
+                {
+                    "name": "simulation_executed",
+                    "measured": False,
+                    "target": True,
+                    "status": "fail",
+                    "issues": [reason],
+                }
+            ],
+            "analytical_checks": [],
+            "passes": 0,
+            "fails": 1,
+            "unknown": 0,
+            "total_checks": 1,
+            "known_checks": 1,
+            "coverage_ratio": 1.0,
+            "overall_pass": False,
+        }
+
+    def _augment_verification_with_references(self, memory: SharedMemory, topology, sizing, constraints, sim, summary):
+        hits = self.retrieve_references(
+            memory,
+            query=f"{topology} verification criteria",
+            topologies=[topology],
+            content_types=["evaluation_criteria"],
+            schemas=["evaluation_criteria"],
+            limit=4,
+            trace_label=f"verification_criteria::{topology}",
+        )
+        added_checks = []
+        existing_names = {
+            item.get("name")
+            for item in (summary.get("target_checks") or []) + (summary.get("analytical_checks") or [])
+        }
+        for hit in hits:
+            for check in ((hit.get("data") or {}).get("checks") or []):
+                built = self._build_reference_check(check, sizing=sizing, constraints=constraints, sim=sim)
+                if not built or built.get("name") in existing_names:
+                    continue
+                added_checks.append(built)
+                existing_names.add(built.get("name"))
+
+        if not added_checks:
+            return summary, {"used": hits, "added_checks": []}
+
+        target_checks = list(summary.get("target_checks") or [])
+        analytical_checks = list(summary.get("analytical_checks") or [])
+        for check in added_checks:
+            if check.get("check_class") == "target":
+                target_checks.append(check)
+            else:
+                analytical_checks.append(check)
+
+        summary["target_checks"] = target_checks
+        summary["analytical_checks"] = analytical_checks
+        summary["reference_checks"] = added_checks
+        summary["reference_sources"] = [
+            {
+                "id": hit.get("id"),
+                "title": hit.get("title"),
+                "source_path": hit.get("source_path"),
+            }
+            for hit in hits
+        ]
+        checks = target_checks + analytical_checks
+        passes = sum(1 for item in checks if item.get("status") == "pass")
+        fails = sum(1 for item in checks if item.get("status") == "fail")
+        unknown = sum(1 for item in checks if item.get("status") == "unknown")
+        known_checks = passes + fails
+        total_checks = len(checks)
+        summary["passes"] = passes
+        summary["fails"] = fails
+        summary["unknown"] = unknown
+        summary["known_checks"] = known_checks
+        summary["total_checks"] = total_checks
+        summary["coverage_ratio"] = (known_checks / total_checks) if total_checks > 0 else 0.0
+        summary["overall_pass"] = fails == 0
+        return summary, {"used": hits, "added_checks": added_checks}
+
+    def _build_reference_check(self, check_spec, sizing, constraints, sim):
+        if not isinstance(check_spec, dict):
+            return None
+
+        name = f"reference::{check_spec.get('name', 'unnamed_check')}"
+        source_name = str(check_spec.get("metric_source") or "simulation").lower()
+        source_map = {
+            "simulation": sim,
+            "sim": sim,
+            "sizing": sizing,
+            "constraints": constraints,
+        }
+        metric_source = source_map.get(source_name, sim)
+        metric_key = check_spec.get("metric_key")
+        measured = self._nested_lookup(metric_source, metric_key) if metric_key else None
+
+        if check_spec.get("target_constraint_key"):
+            target = self._nested_lookup(constraints, check_spec.get("target_constraint_key"))
+        elif check_spec.get("target_sizing_key"):
+            target = self._nested_lookup(sizing, check_spec.get("target_sizing_key"))
+        else:
+            target = check_spec.get("target_value")
+
+        kind = str(check_spec.get("kind") or "target").lower()
+        rel_tol = float(check_spec.get("relative_tolerance", 0.0) or 0.0)
+        abs_tol = check_spec.get("absolute_tolerance")
+        if abs_tol is not None:
+            abs_tol = float(abs_tol)
+
+        payload = {
+            "name": name,
+            "measured": measured,
+            "target": target,
+            "check_class": check_spec.get("check_class", "analytical"),
+        }
+
+        if kind in {"target", "exact"}:
+            result = self._check_metric(name, measured, target, rel_tol=rel_tol, abs_tol=abs_tol)
+            result["check_class"] = payload["check_class"]
+            return result
+        if measured is None or target is None:
+            payload["status"] = "unknown"
+            return payload
+        if kind == "max":
+            payload["status"] = "pass" if float(measured) <= float(target) else "fail"
+            return payload
+        if kind == "min":
+            payload["status"] = "pass" if float(measured) >= float(target) else "fail"
+            return payload
+        if kind == "boolean":
+            payload["status"] = "pass" if bool(measured) is bool(target) else "fail"
+            return payload
+        return None
+
+    def _nested_lookup(self, payload, key):
+        if payload is None or key is None:
+            return None
+        if "." not in str(key):
+            return (payload or {}).get(key)
+        current = payload
+        for part in str(key).split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+            if current is None:
+                return None
+        return current
+
     def _build_verification_summary(self, topology, sizing, constraints, sim):
+        topology = self._analysis_topology(topology)
         target_checks = []
         analytical_checks = []
 
@@ -1579,11 +1966,62 @@ class SimulationAgent(BaseAgent):
                 target_checks[-1]["status"] = "pass" if float(sim.get("power_mw", 1e30)) <= float(constraints.get("power_limit_mw")) else "fail"
             analytical_checks.append(self._check_metric("gain_vs_first_order_estimate", sim.get("gain_db"), gain_est_db, rel_tol=0.30, abs_tol=4.0))
 
-        elif topology == "diff_pair":
+        elif topology == "transimpedance_frontend":
+            target_checks.append(
+                {
+                    "name": "gain_metric_present",
+                    "measured": sim.get("gain_db"),
+                    "target": "available",
+                    "status": "pass" if sim.get("gain_db") is not None else "fail",
+                }
+            )
+            target_checks.append(
+                self._check_metric(
+                    "bandwidth_hz",
+                    sim.get("bandwidth_hz"),
+                    constraints.get("target_bw_hz"),
+                    rel_tol=0.40,
+                )
+            )
+            if constraints.get("power_limit_mw") is not None:
+                check = self._check_metric("power_mw", sim.get("power_mw"), constraints.get("power_limit_mw"), rel_tol=0.0, abs_tol=0.0)
+                if check["status"] != "unknown":
+                    check["status"] = "pass" if float(sim.get("power_mw", 1e30)) <= float(constraints.get("power_limit_mw")) else "fail"
+                target_checks.append(check)
+
+            if (constraints.get("target_transimpedance_ohm") is not None) and (sim.get("gain_db") is not None):
+                measured_zt = 10.0 ** (float(sim.get("gain_db")) / 20.0)
+                analytical_checks.append(
+                    self._check_metric(
+                        "transimpedance_ohm",
+                        measured_zt,
+                        constraints.get("target_transimpedance_ohm"),
+                        rel_tol=0.40,
+                    )
+                )
+
+        elif topology in {
+            "diff_pair",
+            "diff_pair_resistor_load",
+            "diff_pair_current_mirror_load",
+            "diff_pair_active_load",
+            "current_sense_amp_helper",
+        }:
             target_checks.append(self._check_metric("power_mw", sim.get("power_mw"), constraints.get("power_limit_mw"), rel_tol=0.0, abs_tol=0.0))
             if target_checks[-1]["status"] != "unknown":
                 target_checks[-1]["status"] = "pass" if float(sim.get("power_mw", 1e30)) <= float(constraints.get("power_limit_mw")) else "fail"
-            if sim.get("gain_db") is not None:
+
+            if constraints.get("target_gain_db") is not None:
+                target_checks.append(
+                    self._check_metric(
+                        "gain_db",
+                        sim.get("gain_db"),
+                        constraints.get("target_gain_db"),
+                        rel_tol=0.40,
+                        abs_tol=6.0,
+                    )
+                )
+            elif sim.get("gain_db") is not None:
                 gain_floor = float(constraints.get("min_gain_db", 6.0))
                 target_checks.append({
                     "name": "gain_floor_db",
@@ -1591,13 +2029,24 @@ class SimulationAgent(BaseAgent):
                     "target": gain_floor,
                     "status": "pass" if float(sim.get("gain_db")) >= gain_floor else "fail",
                 })
-            tail_current = sizing.get("I_tail")
-            rload = sizing.get("R_load")
-            vov = sizing.get("Vov_target", constraints.get("target_vov_v", 0.2))
-            if tail_current is not None and rload is not None and vov is not None:
-                gm_half = float(tail_current) / max(2.0 * float(vov), 1e-12)
-                gain_est_db = 20.0 * math.log10(max(gm_half * float(rload), 1e-20))
-                analytical_checks.append(self._check_metric("gain_vs_half_circuit_estimate", sim.get("gain_db"), gain_est_db, rel_tol=0.35, abs_tol=4.0))
+            if constraints.get("target_bw_hz") is not None:
+                target_checks.append(
+                    self._check_metric(
+                        "bandwidth_hz",
+                        sim.get("bandwidth_hz"),
+                        constraints.get("target_bw_hz"),
+                        rel_tol=0.45,
+                    )
+                )
+
+            if topology == "diff_pair":
+                tail_current = sizing.get("I_tail")
+                rload = sizing.get("R_load")
+                vov = sizing.get("Vov_target", constraints.get("target_vov_v", 0.2))
+                if tail_current is not None and rload is not None and vov is not None:
+                    gm_half = float(tail_current) / max(2.0 * float(vov), 1e-12)
+                    gain_est_db = 20.0 * math.log10(max(gm_half * float(rload), 1e-20))
+                    analytical_checks.append(self._check_metric("gain_vs_half_circuit_estimate", sim.get("gain_db"), gain_est_db, rel_tol=0.35, abs_tol=4.0))
 
         elif topology == "bjt_diff_pair":
             target_checks.append(self._check_metric("gain_db", sim.get("gain_db"), constraints.get("target_gain_db"), rel_tol=0.30, abs_tol=4.0))
@@ -1814,7 +2263,13 @@ class SimulationAgent(BaseAgent):
             if delay >= -1e-12:
                 metrics["decision_delay_s"] = max(delay, 0.0)
         if vout:
-            metrics["decision_correct"] = max(vout) > threshold_out
+            vout_min = float(min(vout))
+            vout_max = float(max(vout))
+            metrics["decision_swing_v"] = vout_max - vout_min
+            metrics["decision_correct"] = (
+                (vout_max - vout_min) >= 0.2 * float(supply_v)
+                and ((vout_max > threshold_out) or (vout_min < threshold_out))
+            )
         return metrics
 
     def _write_svg_plot(self, out_path, x_values, y_series, title, xlabel, ylabel):

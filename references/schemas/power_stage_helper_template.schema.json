@@ -1,0 +1,22 @@
+{
+  "id": "schema-power-stage-helper-template",
+  "title": "Power Stage Helper Template Schema",
+  "schema": "schema_definition",
+  "content_type": "schema_definition",
+  "summary": "Starter schema for power stage helper templates.",
+  "data": {
+    "record_type": "power_stage_helper_template",
+    "required_fields": ["id", "title", "schema", "topologies", "summary"],
+    "recommended_fields": ["default_constraints", "future_extension_points", "notes"],
+    "example_stub": {
+      "id": "template-power-helper-example",
+      "title": "Generic Power Helper Template",
+      "schema": "power_stage_helper_template",
+      "topologies": ["ldo_error_amp_core", "compensation_network_helper"],
+      "summary": "Vendor-neutral power helper starter.",
+      "data": {
+        "default_constraints": {"power_limit_mw": 2.0}
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "schema-current-mirror-template",
+  "title": "Current Mirror Template Schema",
+  "schema": "schema_definition",
+  "content_type": "schema_definition",
+  "summary": "Starter schema for current mirror templates.",
+  "data": {
+    "record_type": "current_mirror_template",
+    "required_fields": ["id", "title", "schema", "topologies", "summary"],
+    "recommended_fields": ["default_constraints", "future_extension_points", "notes"],
+    "example_stub": {
+      "id": "template-mirror-example",
+      "title": "Generic Mirror Template",
+      "schema": "current_mirror_template",
+      "topologies": ["current_mirror"],
+      "summary": "Vendor-neutral mirror starter.",
+      "data": {
+        "default_constraints": {"mirror_ratio": 1.0, "target_vov_v": 0.18}
+      }
+    }
+  }
+}

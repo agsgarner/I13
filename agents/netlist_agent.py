@@ -6,6 +6,7 @@ import re
 from agents.base_agent import BaseAgent
 from agents.design_status import DesignStatus
 from core.shared_memory import SharedMemory
+from core.topology_aliases import canonical_topology_key
 
 
 class NetlistAgent(BaseAgent):
@@ -15,6 +16,7 @@ class NetlistAgent(BaseAgent):
         "ac": ["\n                ac ", "\nac "],
         "dc": ["\n                dc ", "\ndc "],
         "tran": ["\n                tran ", "\ntran "],
+        "noise": ["\n                noise ", "\nnoise "],
     }
 
     TEMPLATE_TOPOLOGIES = {
@@ -26,22 +28,41 @@ class NetlistAgent(BaseAgent):
         "current_mirror",
         "wilson_current_mirror",
         "cascode_current_mirror",
+        "wide_swing_current_mirror",
         "widlar_current_mirror",
         "diff_pair",
+        "diff_pair_resistor_load",
+        "diff_pair_current_mirror_load",
+        "diff_pair_active_load",
+        "bjt_diff_pair",
         "two_stage_miller",
+        "telescopic_cascode_opamp_core",
+        "ldo_error_amp_core",
         "folded_cascode_opamp",
+        "folded_cascode_opamp_core",
         "gm_stage",
         "common_drain",
+        "adc_input_buffer",
+        "adc_reference_buffer",
+        "dac_output_buffer",
         "common_gate",
         "source_degenerated_cs",
+        "transimpedance_frontend",
         "common_source_active_load",
         "diode_connected_stage",
         "cascode_amplifier",
+        "compensation_network_helper",
+        "adc_anti_alias_rc",
+        "dac_reference_conditioning",
+        "active_filter_stage",
         "nand2_cmos",
         "sram6t_cell",
         "lc_oscillator_cross_coupled",
         "bandgap_reference_core",
         "comparator",
+        "static_comparator",
+        "latched_comparator",
+        "current_sense_amp_helper",
     }
 
     def run_agent(self, memory: SharedMemory):
@@ -86,10 +107,38 @@ class NetlistAgent(BaseAgent):
                 memory.write("netlist_raw", netlist)
                 return None
 
+        reference_summary = self._collect_netlist_references(memory, topology, constraints)
+        reference_header = self._build_reference_header(reference_summary)
+        if reference_header:
+            netlist = reference_header + "\n" + netlist
+        memory.write("netlist_reference_summary", reference_summary)
         memory.write("netlist", netlist)
         memory.write("netlist_source", source)
         memory.write("status", DesignStatus.NETLIST_GENERATED)
         return netlist
+
+    def _collect_netlist_references(self, memory: SharedMemory, topology: str, constraints: dict):
+        query = f"{topology} netlist skeleton {constraints}"
+        hits = self.retrieve_references(
+            memory,
+            query=query,
+            topologies=[topology],
+            content_types=["example_netlist", "cookbook_circuit", "template"],
+            limit=4,
+            trace_label=f"netlist_context::{topology}",
+        )
+        return {"hits": hits}
+
+    def _build_reference_header(self, reference_summary: dict):
+        hits = (reference_summary or {}).get("hits") or []
+        if not hits:
+            return ""
+        lines = ["* Reference context:"]
+        for hit in hits[:3]:
+            lines.append(
+                f"*   {hit.get('id')} | {hit.get('title')} | {hit.get('source_path')}"
+            )
+        return "\n".join(lines)
 
     def _validate_netlist_against_plan(self, memory: SharedMemory, netlist: str):
         plan = ((memory.read("case_metadata") or {}).get("simulation_plan") or {})
@@ -191,7 +240,24 @@ class NetlistAgent(BaseAgent):
 
     def _build_template_netlist(self, topology, sizing, constraints, case_meta=None):
         case_meta = case_meta or {}
-        if topology == "rc_lowpass":
+        topology_eval = canonical_topology_key(topology)
+        if topology in {"diff_pair_current_mirror_load", "diff_pair_active_load"}:
+            topology_eval = topology
+
+        if topology_eval == "telescopic_cascode_opamp_core":
+            topology_eval = "two_stage_miller"
+        if topology_eval == "folded_cascode_opamp_core":
+            topology_eval = "folded_cascode_opamp"
+        if topology_eval == "ldo_error_amp_core":
+            topology_eval = "two_stage_miller"
+        if topology_eval == "latched_comparator":
+            topology_eval = "comparator"
+        if topology_eval == "wide_swing_current_mirror":
+            topology_eval = "wide_swing_current_mirror"
+        if topology_eval == "active_filter_stage":
+            topology_eval = "rlc_lowpass_2nd_order"
+
+        if topology_eval == "rc_lowpass":
             r = float(sizing["R_ohm"])
             c = float(sizing["C_f"])
             vin_ac = float(constraints.get("vin_ac", 1.0))
@@ -214,7 +280,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "rlc_lowpass_2nd_order":
+        if topology_eval == "rlc_lowpass_2nd_order":
             r = float(sizing["R_ohm"])
             l_h = float(sizing["L_h"])
             c_f = float(sizing["C_f"])
@@ -244,7 +310,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "rlc_highpass_2nd_order":
+        if topology_eval == "rlc_highpass_2nd_order":
             r = float(sizing["R_ohm"])
             l_h = float(sizing["L_h"])
             c_f = float(sizing["C_f"])
@@ -274,7 +340,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "rlc_bandpass_2nd_order":
+        if topology_eval == "rlc_bandpass_2nd_order":
             r = float(sizing["R_ohm"])
             l_h = float(sizing["L_h"])
             c_f = float(sizing["C_f"])
@@ -303,7 +369,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "common_source_res_load":
+        if topology_eval == "common_source_res_load":
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(sizing.get("Vin_bias", constraints.get("vin_dc", 0.75)))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
@@ -336,7 +402,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "current_mirror":
+        if topology_eval == "current_mirror":
             vdd = float(constraints.get("supply_v", 1.8))
             iref = float(sizing["I_ref"])
             wref = float(sizing["W_ref"])
@@ -367,7 +433,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "wilson_current_mirror":
+        if topology_eval == "wilson_current_mirror":
             vdd = float(constraints.get("supply_v", 1.8))
             iref = float(sizing["I_ref"])
             wref = float(sizing["W_ref"])
@@ -402,7 +468,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "cascode_current_mirror":
+        if topology_eval == "cascode_current_mirror":
             vdd = float(constraints.get("supply_v", 1.8))
             iref = float(sizing["I_ref"])
             compliance_v = float(constraints.get("compliance_v", 0.9))
@@ -434,7 +500,35 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "widlar_current_mirror":
+        if topology_eval == "wide_swing_current_mirror":
+            vdd = float(constraints.get("supply_v", 1.8))
+            iref = float(sizing["I_ref"])
+            compliance_v = float(constraints.get("compliance_v", 0.5))
+
+            return f"""* Wide-swing cascode current mirror
+                VDD vdd 0 DC {vdd}
+                VCAS vcas 0 DC {float(sizing["Vbias_cas"])}
+                VOUT out 0 DC {compliance_v}
+                IREF vdd nref DC {iref}
+                MREFC nref vcas nx 0 NMOS W={float(sizing["W_cas"])} L={float(sizing["L_cas"])}
+                MREF nx nref 0 0 NMOS W={float(sizing["W_ref"])} L={float(sizing["L_ref"])}
+                MOUTC out vcas ny 0 NMOS W={float(sizing["W_cas"])} L={float(sizing["L_cas"])}
+                MOUT ny nref 0 0 NMOS W={float(sizing["W_out"])} L={float(sizing["L_out"])}
+                .model NMOS NMOS (LEVEL=1 VTO=0.45 KP=220u LAMBDA=0.02)
+
+                .control
+                op
+                let iop = -i(VOUT)
+                print iop
+                dc VOUT 0 {vdd} 0.02
+                let iout = -i(VOUT)
+                wrdata dc_out.csv v(out) iout
+                quit
+                .endc
+                .end
+                """
+
+        if topology_eval == "widlar_current_mirror":
             vdd = float(constraints.get("supply_v", 1.8))
             iref = float(sizing["I_ref"])
             compliance_v = float(constraints.get("compliance_v", 0.8))
@@ -462,7 +556,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "diff_pair":
+        if topology_eval == "diff_pair":
             vdd = float(constraints.get("supply_v", 1.8))
             vicm = float(constraints.get("vicm_v", 0.9))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
@@ -507,18 +601,100 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "two_stage_miller":
+        if topology_eval == "diff_pair_current_mirror_load" or topology_eval == "diff_pair_active_load":
+            vdd = float(constraints.get("supply_v", 1.8))
+            vicm = float(constraints.get("vicm_v", 0.9))
+            vin_ac = float(constraints.get("vin_ac", 1e-3))
+            vin_step = float(constraints.get("vin_step", 0.02))
+            cload = float(constraints.get("load_cap_f", 0.5e-12))
+            win = float(sizing["W_in"])
+            lin = float(sizing["L_in"])
+            wtail = float(sizing["W_tail"])
+            ltail = float(sizing["L_tail"])
+            wload = float(sizing["W_load"])
+            lload = float(sizing["L_load"])
+
+            return f"""* Differential pair with PMOS active current-mirror load
+                VDD vdd 0 DC {vdd}
+                VIP inp 0 DC {vicm} AC {vin_ac} PULSE({vicm} {vicm + vin_step} 0 2n 2n 100n 200n)
+                VIN inn 0 DC {vicm} AC {-vin_ac} PULSE({vicm} {vicm - vin_step} 0 2n 2n 100n 200n)
+                M1 outp inp tail 0 NMOS W={win} L={lin}
+                M2 outn inn tail 0 NMOS W={win} L={lin}
+                MTAIL tail vbias 0 0 NMOS W={wtail} L={ltail}
+                MP1 outp outn vdd vdd PMOS W={wload} L={lload}
+                MP2 outn outn vdd vdd PMOS W={wload} L={lload}
+                CLOADP outp 0 {cload}
+                CLOADN outn 0 {cload}
+                VBIAS vbias 0 DC 0.75
+                .model NMOS NMOS (LEVEL=1 VTO=0.5 KP=200u LAMBDA=0.02)
+                .model PMOS PMOS (LEVEL=1 VTO=-0.5 KP=80u LAMBDA=0.02)
+
+                .control
+                set wr_singlescale
+                op
+                print i(VDD) v(outp) v(outn)
+                ac dec 100 1 1e9
+                wrdata ac_out.csv frequency vm(outp,outn)
+                tran 1n 1u
+                wrdata tran_in.csv time v(inp)
+                wrdata tran_out.csv time v(outp)
+                wrdata tran_outn.csv time v(outn)
+                wrdata tran_diff.csv time v(outp,outn)
+                quit
+                .endc
+                .end
+                """
+
+        if topology_eval == "bjt_diff_pair":
+            vcc = float(constraints.get("supply_v", 1.8))
+            vicm = float(constraints.get("vicm_v", 0.9))
+            vin_ac = float(constraints.get("vin_ac", 1e-3))
+            vin_step = float(constraints.get("vin_step", 0.01))
+            rc = float(sizing["R_C"])
+            i_tail = float(sizing["I_tail"])
+            cload = float(constraints.get("load_cap_f", 0.5e-12))
+
+            return f"""* BJT differential pair with resistor loads
+                VCC vcc 0 DC {vcc}
+                VIP inp 0 DC {vicm} AC {vin_ac} PULSE({vicm} {vicm + vin_step} 0 2n 2n 100n 200n)
+                VIN inn 0 DC {vicm} AC {-vin_ac} PULSE({vicm} {vicm - vin_step} 0 2n 2n 100n 200n)
+                RC1 vcc outp {rc}
+                RC2 vcc outn {rc}
+                CLOADP outp 0 {cload}
+                CLOADN outn 0 {cload}
+                Q1 outp inp tail QN
+                Q2 outn inn tail QN
+                ITAIL tail 0 DC {i_tail}
+                .model QN NPN (IS=1e-15 BF=120)
+
+                .control
+                set wr_singlescale
+                op
+                print i(VCC) v(outp) v(outn)
+                ac dec 100 1 1e8
+                wrdata ac_out.csv frequency vm(outp,outn)
+                tran 1n 1u
+                wrdata tran_in.csv time v(inp)
+                wrdata tran_out.csv time v(outp)
+                wrdata tran_outn.csv time v(outn)
+                wrdata tran_diff.csv time v(outp,outn)
+                quit
+                .endc
+                .end
+                """
+
+        if topology_eval == "two_stage_miller":
             if case_meta.get("demo_model") in {"behavioral_opamp_proxy", "native_telescopic"}:
                 return self._build_telescopic_ota_netlist(sizing, constraints)
             return self._build_two_stage_miller_transistor_netlist(sizing, constraints)
 
-        if topology == "gm_stage":
+        if topology_eval == "gm_stage":
             return self._build_gm_stage_transistor_netlist(sizing, constraints)
 
-        if topology == "folded_cascode_opamp":
+        if topology_eval == "folded_cascode_opamp":
             return self._build_folded_cascode_transistor_netlist(sizing, constraints)
 
-        if topology == "common_drain":
+        if topology_eval == "common_drain":
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(sizing.get("Vin_bias", constraints.get("vin_dc", 0.8)))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
@@ -550,7 +726,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "common_gate":
+        if topology_eval == "common_gate":
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(constraints.get("vin_dc", 0.35))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
@@ -584,7 +760,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "source_degenerated_cs":
+        if topology_eval == "source_degenerated_cs":
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(constraints.get("vin_dc", 0.85))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
@@ -617,7 +793,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "common_source_active_load":
+        if topology_eval == "common_source_active_load":
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(sizing.get("Vin_bias", constraints.get("vin_dc", 0.75)))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
@@ -653,7 +829,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "diode_connected_stage":
+        if topology_eval == "diode_connected_stage":
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(constraints.get("vin_dc", 0.75))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
@@ -688,7 +864,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "cascode_amplifier":
+        if topology_eval == "cascode_amplifier":
             vdd = float(constraints.get("supply_v", 1.8))
             vin_dc = float(constraints.get("vin_dc", 0.7))
             vin_ac = float(constraints.get("vin_ac", 1e-3))
@@ -721,7 +897,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "nand2_cmos":
+        if topology_eval == "nand2_cmos":
             vdd = float(constraints.get("supply_v", 1.8))
             wn = float(sizing["W_n"])
             ln = float(sizing["L_n"])
@@ -750,7 +926,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "sram6t_cell":
+        if topology_eval == "sram6t_cell":
             vdd = float(constraints.get("supply_v", 1.8))
             return f"""* 6T SRAM cell write/read demo
                 VDD vdd 0 DC {vdd}
@@ -781,7 +957,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "lc_oscillator_cross_coupled":
+        if topology_eval == "lc_oscillator_cross_coupled":
             vdd = float(constraints.get("supply_v", 1.8))
             return f"""* Cross-coupled LC oscillator
                 VDD vdd 0 DC {vdd}
@@ -808,7 +984,7 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "bandgap_reference_core":
+        if topology_eval == "bandgap_reference_core":
             vdd = float(constraints.get("supply_v", 1.8))
             icore = float(sizing["I_core"])
             area_ratio = float(sizing["area_ratio"])
@@ -837,7 +1013,88 @@ class NetlistAgent(BaseAgent):
                 .end
                 """
 
-        if topology == "comparator":
+        if topology_eval == "transimpedance_frontend":
+            vdd = float(constraints.get("supply_v", 1.8))
+            vin_ac = float(constraints.get("sensor_ac_a", 1e-6))
+            vin_step = float(constraints.get("sensor_step_a", 2e-6))
+            rf = float(sizing["R_feedback_ohm"])
+            cf = float(sizing["C_feedback_f"])
+            i_bias = float(sizing["I_bias"])
+            pole_r = 1e3
+            pole_c = max(cf / pole_r, 1e-18)
+            f_stop = max(1e6, 50.0 * float(constraints.get("target_bw_hz", 5e5)))
+
+            return f"""* Transimpedance front-end helper
+                VDD vdd 0 DC {vdd}
+                ISENS sense 0 DC 0 AC {vin_ac} PULSE(0 {vin_step} 0 2n 2n 100n 200n)
+                VMEAS sense in 0
+                IBIAS vdd 0 DC {i_bias}
+                HTIA raw 0 VMEAS {-rf}
+                RLOAD raw 0 1e9
+                RPOLE raw out {pole_r}
+                CPOLE out 0 {pole_c}
+                CLOAD out 0 {float(constraints.get("load_cap_f", 0.5e-12))}
+
+                .control
+                set wr_singlescale
+                op
+                ac dec 100 1 {f_stop}
+                wrdata ac_out.csv frequency vm(out)
+                tran 1n 1u
+                wrdata tran_in.csv time i(isens)
+                wrdata tran_out.csv time v(out)
+                noise v(out) isens dec 20 1 {f_stop}
+                quit
+                .endc
+                .end
+                """
+
+        if topology_eval == "current_sense_amp_helper":
+            vdd = float(constraints.get("supply_v", 1.8))
+            vicm = float(constraints.get("vicm_v", 0.9))
+            vin_ac = float(constraints.get("vin_ac", 1e-3))
+            vin_step = float(constraints.get("vin_step", 0.01))
+            rload = float(sizing.get("R_load", constraints.get("R_load_ohm", 5000.0)))
+            cload = float(constraints.get("load_cap_f", 0.3e-12))
+            win = float(sizing["W_in"])
+            lin = float(sizing["L_in"])
+            wtail = float(sizing["W_tail"])
+            ltail = float(sizing["L_tail"])
+
+            return f"""* Current-sense amplifier helper (differential front-end proxy)
+                VDD vdd 0 DC {vdd}
+                VSENSEP inp 0 DC {vicm} AC {vin_ac} PULSE({vicm} {vicm + vin_step} 0 2n 2n 100n 200n)
+                VSENSEN inn 0 DC {vicm} AC {-vin_ac} PULSE({vicm} {vicm - vin_step} 0 2n 2n 100n 200n)
+                RL1 vdd outp {rload}
+                RL2 vdd outn {rload}
+                CLOADP outp 0 {cload}
+                CLOADN outn 0 {cload}
+                M1 outp inp tail 0 NMOS W={win} L={lin}
+                M2 outn inn tail 0 NMOS W={win} L={lin}
+                MTAIL tail vbias 0 0 NMOS W={wtail} L={ltail}
+                VBIAS vbias 0 DC 0.78
+                .model NMOS NMOS (LEVEL=1 VTO=0.5 KP=200u LAMBDA=0.02)
+
+                .control
+                set wr_singlescale
+                op
+                print i(VDD) v(outp) v(outn)
+                ac dec 100 1 1e8
+                wrdata ac_out.csv frequency vm(outp,outn)
+                tran 1n 1u
+                wrdata tran_in.csv time v(inp)
+                wrdata tran_out.csv time v(outp)
+                wrdata tran_outn.csv time v(outn)
+                wrdata tran_diff.csv time v(outp,outn)
+                quit
+                .endc
+                .end
+                """
+
+        if topology_eval == "static_comparator":
+            return self._build_static_comparator_transistor_netlist(sizing, constraints)
+
+        if topology_eval == "comparator":
             return self._build_dynamic_comparator_transistor_netlist(sizing, constraints)
 
         return None
@@ -869,6 +1126,7 @@ class NetlistAgent(BaseAgent):
                 print i(VDD) v(out) v(x)
                 ac dec 100 1 1e9
                 wrdata ac_out.csv frequency vm(out)
+                wrdata ac_phase.csv frequency vp(out)
                 tran 1n 1u
                 wrdata tran_in.csv time v(inp)
                 wrdata tran_out.csv time v(out)
@@ -908,6 +1166,7 @@ class NetlistAgent(BaseAgent):
                 print i(VDD) v(out)
                 ac dec 100 1 1e9
                 wrdata ac_out.csv frequency vm(raw)
+                wrdata ac_phase.csv frequency vp(raw)
                 tran 1n 1u
                 wrdata tran_in.csv time v(in)
                 wrdata tran_out.csv time v(out)
@@ -988,6 +1247,7 @@ class NetlistAgent(BaseAgent):
                 print i(VDD) v(out) v(nraw)
                 ac dec 120 1 1e9
                 wrdata ac_out.csv frequency vm(out)
+                wrdata ac_phase.csv frequency vp(out)
                 tran 1n 1u
                 wrdata tran_in.csv time v(inp)
                 wrdata tran_out.csv time v(out)
@@ -1025,6 +1285,45 @@ class NetlistAgent(BaseAgent):
                 .model NMOS NMOS (LEVEL=1 VTO=0.5 KP=200u LAMBDA=0.02)
 
                 .control
+                tran 20p 24n
+                wrdata tran_in.csv time v(inp)
+                wrdata tran_out.csv time v(out)
+                quit
+                .endc
+                .end
+                """
+
+    def _build_static_comparator_transistor_netlist(self, sizing: dict, constraints: dict):
+        vdd = float(constraints.get("supply_v", 1.8))
+        vcm = float(sizing["vcm_v"])
+        overdrive = float(sizing["input_overdrive_v"])
+        cload = float(sizing["load_cap_f"])
+        tail_current = float(sizing["tail_current_a"])
+        l = float(constraints.get("L_m", 180e-9))
+        mu_n = float(constraints.get("mu_cox_a_per_v2", 200e-6))
+        vov = max(0.08, min(0.25, float(constraints.get("target_vov_v", 0.16))))
+        id_each = max(0.5 * tail_current, 1e-9)
+        w_in = max(0.5, 2.0 * id_each / max(mu_n * vov**2, 1e-30)) * l
+        r_load = max(1500.0, 0.6 * vdd / max(tail_current, 1e-9))
+
+        return f"""* Static comparator front-end (non-latched)
+                VDD vdd 0 DC {vdd}
+                VIP inp 0 PULSE({vcm - 0.5 * overdrive} {vcm + 0.5 * overdrive} 2n 100p 100p 20n 40n)
+                VIN inn 0 DC {vcm - 0.5 * overdrive}
+                ITAIL tail 0 DC {tail_current}
+                M1 outp inp tail 0 NMOS W={w_in} L={l}
+                M2 outn inn tail 0 NMOS W={w_in} L={l}
+                RLP vdd outp {r_load}
+                RLN vdd outn {r_load}
+                CLOADP outp 0 {0.5 * cload}
+                CLOADN outn 0 {0.5 * cload}
+                BOUT out 0 V = 0.5*v(vdd)*(1 + tanh(8*(v(outp)-v(outn))))
+                COUT out 0 {0.25 * cload}
+                .model NMOS NMOS (LEVEL=1 VTO=0.5 KP=200u LAMBDA=0.02)
+
+                .control
+                op
+                print v(out) v(outp) v(outn)
                 tran 20p 24n
                 wrdata tran_in.csv time v(inp)
                 wrdata tran_out.csv time v(out)

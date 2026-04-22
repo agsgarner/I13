@@ -1,0 +1,112 @@
+{
+  "schema": "reference_bundle",
+  "content_type": "evaluation_criteria",
+  "items": [
+    {
+      "id": "eval-common-source-stage",
+      "title": "Evaluation Criteria for Single-Stage Gain Blocks",
+      "schema": "evaluation_criteria",
+      "topologies": ["common_source_res_load", "source_degenerated_cs", "common_source_active_load", "common_gate", "common_drain"],
+      "tags": ["verification", "gain", "power"],
+      "summary": "Reference checks for first-pass single-stage amplifiers.",
+      "data": {
+        "checks": [
+          {
+            "name": "reference_gain_target",
+            "metric_key": "gain_db",
+            "target_constraint_key": "target_gain_db",
+            "kind": "target",
+            "relative_tolerance": 0.25,
+            "absolute_tolerance": 3.0,
+            "check_class": "target"
+          },
+          {
+            "name": "reference_power_limit",
+            "metric_key": "power_mw",
+            "target_constraint_key": "power_limit_mw",
+            "kind": "max",
+            "check_class": "target"
+          }
+        ]
+      }
+    },
+    {
+      "id": "eval-opamp-family",
+      "title": "Evaluation Criteria for Op-Amp Family Blocks",
+      "schema": "evaluation_criteria",
+      "topologies": ["two_stage_miller", "folded_cascode_opamp", "ldo_error_amp_core"],
+      "tags": ["verification", "opamp", "ugbw"],
+      "summary": "Reference checks for higher-gain op-amp style stages.",
+      "data": {
+        "checks": [
+          {
+            "name": "reference_opamp_gain",
+            "metric_key": "gain_db",
+            "target_constraint_key": "target_gain_db",
+            "kind": "target",
+            "relative_tolerance": 0.25,
+            "absolute_tolerance": 8.0,
+            "check_class": "target"
+          },
+          {
+            "name": "reference_opamp_ugbw",
+            "metric_key": "ugbw_hz",
+            "target_constraint_key": "target_ugbw_hz",
+            "kind": "target",
+            "relative_tolerance": 1.15,
+            "check_class": "target"
+          }
+        ]
+      }
+    },
+    {
+      "id": "eval-current-mirror-family",
+      "title": "Evaluation Criteria for Current Mirrors",
+      "schema": "evaluation_criteria",
+      "topologies": ["current_mirror", "cascode_current_mirror", "wide_swing_current_mirror", "wilson_current_mirror", "widlar_current_mirror"],
+      "tags": ["verification", "mirror", "bias"],
+      "summary": "Reference checks for mirrored current accuracy and compliance-oriented sizing.",
+      "data": {
+        "checks": [
+          {
+            "name": "reference_iout_target",
+            "metric_key": "iout_a",
+            "target_constraint_key": "target_iout_a",
+            "kind": "target",
+            "relative_tolerance": 0.12,
+            "check_class": "target"
+          }
+        ]
+      }
+    },
+    {
+      "id": "eval-composite-pipeline",
+      "title": "Evaluation Criteria for Composite Pipelines",
+      "schema": "evaluation_criteria",
+      "topologies": ["composite_pipeline"],
+      "tags": ["verification", "pipeline", "stages"],
+      "summary": "Reference checks for staged signal chains.",
+      "data": {
+        "checks": [
+          {
+            "name": "reference_pipeline_gain",
+            "metric_key": "gain_db",
+            "target_constraint_key": "target_gain_db",
+            "kind": "target",
+            "relative_tolerance": 0.35,
+            "absolute_tolerance": 5.0,
+            "check_class": "target"
+          },
+          {
+            "name": "reference_stage_count",
+            "metric_source": "sizing",
+            "metric_key": "stage_count",
+            "target_value": 2,
+            "kind": "min",
+            "check_class": "analytical"
+          }
+        ]
+      }
+    }
+  ]
+}

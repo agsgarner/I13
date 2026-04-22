@@ -21,29 +21,51 @@ class OpPointAgent(BaseAgent):
         "current_mirror",
         "wilson_current_mirror",
         "cascode_current_mirror",
+        "wide_swing_current_mirror",
         "widlar_current_mirror",
         "diff_pair",
+        "diff_pair_resistor_load",
+        "diff_pair_current_mirror_load",
+        "diff_pair_active_load",
         "bjt_diff_pair",
         "gm_stage",
         "two_stage_miller",
+        "telescopic_cascode_opamp_core",
+        "ldo_error_amp_core",
         "folded_cascode_opamp",
+        "folded_cascode_opamp_core",
         "common_drain",
+        "adc_input_buffer",
+        "adc_reference_buffer",
+        "dac_output_buffer",
         "common_gate",
         "source_degenerated_cs",
         "common_source_active_load",
         "diode_connected_stage",
         "cascode_amplifier",
+        "transimpedance_frontend",
+        "current_sense_amp_helper",
+        "compensation_network_helper",
+        "adc_anti_alias_rc",
+        "dac_reference_conditioning",
+        "active_filter_stage",
         "nand2_cmos",
         "sram6t_cell",
         "lc_oscillator_cross_coupled",
         "bandgap_reference_core",
         "comparator",
+        "static_comparator",
+        "latched_comparator",
     }
 
-    def __init__(self, llm=None, ngspice_path=None, max_op_passes=2, max_retries=1, wait=0):
-        super().__init__(llm=llm, max_retries=max_retries, wait=wait)
+    def __init__(self, llm=None, reference_catalog=None, ngspice_path=None, max_op_passes=2, max_retries=1, wait=0):
+        super().__init__(llm=llm, reference_catalog=reference_catalog, max_retries=max_retries, wait=wait)
         self.max_op_passes = max_op_passes
-        self.ngspice_path = ngspice_path or os.getenv("NGSPICE_PATH") or self._find_ngspice()
+        configured = ngspice_path or os.getenv("NGSPICE_PATH")
+        if configured and os.path.exists(configured):
+            self.ngspice_path = configured
+        else:
+            self.ngspice_path = self._find_ngspice()
 
     def run_agent(self, memory: SharedMemory):
         topology = memory.read("selected_topology")
@@ -66,9 +88,19 @@ class OpPointAgent(BaseAgent):
             return None
 
         if not self.ngspice_path:
-            memory.write("status", DesignStatus.OP_SIZING_FAILED)
-            memory.write("op_point_error", "ngspice not found for OP sizing pass.")
-            return None
+            payload = {
+                "supported": True,
+                "changed": False,
+                "skipped": True,
+                "reason": "ngspice not found for OP sizing pass; continuing with deterministic first-pass sizing.",
+                "notes": [
+                    "OP sizing skipped because ngspice is unavailable.",
+                    "Continuing to simulation stage in degraded mode.",
+                ],
+            }
+            memory.write("op_point_results", payload)
+            memory.write("status", DesignStatus.OP_SIZING_COMPLETE)
+            return payload
 
         if pass_count >= self.max_op_passes:
             memory.write(

@@ -1,0 +1,23 @@
+{
+  "id": "schema-opamp-stage-template",
+  "title": "Op-Amp Stage Template Schema",
+  "schema": "schema_definition",
+  "content_type": "schema_definition",
+  "summary": "Starter schema for op-amp stage templates.",
+  "data": {
+    "record_type": "op_amp_stage_template",
+    "required_fields": ["id", "title", "schema", "topologies", "summary"],
+    "recommended_fields": ["default_constraints", "sizing_defaults", "future_extension_points", "notes"],
+    "example_stub": {
+      "id": "template-opamp-example",
+      "title": "Generic Op-Amp Stage Template",
+      "schema": "op_amp_stage_template",
+      "topologies": ["two_stage_miller"],
+      "summary": "Vendor-neutral op-amp stage starter.",
+      "data": {
+        "default_constraints": {"phase_margin_deg": 60.0},
+        "sizing_defaults": {"gm_id_target_s_per_a": 10.0}
+      }
+    }
+  }
+}

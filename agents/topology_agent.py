@@ -35,6 +35,7 @@ class TopologyAgent(BaseAgent):
         topology = None
         confidence = 0.0
         reasoning = ""
+        reference_summary = {"used": [], "candidate_topologies": []}
 
         forced_topology = case_meta.get("forced_topology") or constraints.get("forced_topology")
         if forced_topology in TOPOLOGY_LIBRARY:
@@ -42,9 +43,21 @@ class TopologyAgent(BaseAgent):
             confidence = 0.99
             reasoning = "Case metadata forced the demo topology."
         else:
+            reference_result = self._reference_guided_topology(spec_text, constraints, memory=memory)
             rule_result = self._rule_based_topology(spec, constraints)
-            if rule_result is not None:
+            if reference_result is not None:
+                reference_summary = {
+                    "used": reference_result[3],
+                    "candidate_topologies": reference_result[4],
+                }
+            if rule_result is not None and reference_result is not None and rule_result[0] == reference_result[0]:
+                topology = rule_result[0]
+                confidence = max(rule_result[1], reference_result[1])
+                reasoning = f"{rule_result[2]} Reference retrieval agreed with this choice."
+            elif rule_result is not None:
                 topology, confidence, reasoning = rule_result
+            elif reference_result is not None:
+                topology, confidence, reasoning = reference_result[:3]
             else:
                 llm_result = self._llm_topology(spec, constraints, memory=memory)
                 if llm_result is not None:
@@ -87,6 +100,20 @@ class TopologyAgent(BaseAgent):
         memory.write("topology_metadata", TOPOLOGY_LIBRARY[topology])
         memory.write("topology_confidence", confidence)
         memory.write("topology_reasoning", reasoning)
+        reference_summary["used"] = self.retrieve_references(
+            memory,
+            query=spec_text,
+            topologies=selected_topologies,
+            content_types=[
+                "topology_note",
+                "device_selection_heuristic",
+                "cookbook_circuit",
+                "template",
+            ],
+            limit=4,
+            trace_label="topology_selected_context",
+        )
+        memory.write("topology_reference_summary", reference_summary)
         memory.write("status", DesignStatus.TOPOLOGY_SELECTED)
         memory.append_history(
             "topology_selected",
@@ -103,7 +130,73 @@ class TopologyAgent(BaseAgent):
             "topology_plan": stage_plan,
             "confidence": confidence,
             "reasoning": reasoning,
+            "references": reference_summary,
         }
+
+    def _reference_guided_topology(self, spec_text: str, constraints: dict, memory: SharedMemory):
+        query_parts = [spec_text]
+        for key in (
+            "target_gain_db",
+            "target_bw_hz",
+            "target_ugbw_hz",
+            "target_iout_a",
+            "target_fc_hz",
+            "target_center_hz",
+            "power_limit_mw",
+            "input_overdrive_v",
+        ):
+            value = constraints.get(key)
+            if value is not None:
+                query_parts.append(f"{key} {value}")
+        hits = self.retrieve_references(
+            memory,
+            query=" ".join(query_parts),
+            content_types=[
+                "topology_note",
+                "device_selection_heuristic",
+                "cookbook_circuit",
+                "template",
+                "evaluation_criteria",
+            ],
+            limit=12,
+            trace_label="topology_candidate_search",
+        )
+        if not hits:
+            return None
+
+        scores = {}
+        evidence = {}
+        for hit in hits:
+            for topology in hit.get("topologies") or []:
+                if topology not in TOPOLOGY_LIBRARY or topology == "composite_pipeline":
+                    continue
+                scores[topology] = float(scores.get(topology, 0.0)) + float(hit.get("score", 0.0))
+                evidence.setdefault(topology, []).append(
+                    {
+                        "id": hit.get("id"),
+                        "title": hit.get("title"),
+                        "score": hit.get("score"),
+                    }
+                )
+
+        if not scores:
+            return None
+
+        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        best_topology, best_score = ranked[0]
+        if best_score < 6.0:
+            return None
+
+        confidence = min(0.85, 0.45 + (best_score / 30.0))
+        reasoning = (
+            f"Structured reference retrieval favored '{best_topology}' "
+            f"from {len(evidence.get(best_topology, []))} matched reference entries."
+        )
+        candidate_topologies = [
+            {"topology": topology, "score": round(score, 3)}
+            for topology, score in ranked[:5]
+        ]
+        return best_topology, confidence, reasoning, evidence.get(best_topology, []), candidate_topologies
 
     def _build_stage_plan(
         self,
@@ -287,6 +380,8 @@ class TopologyAgent(BaseAgent):
             ("rlc" in spec, 0.15, "rlc wording"),
         ])
         if conf >= 0.50:
+            if "active filter" in spec:
+                return ("active_filter_stage", conf, f"Matched by: {', '.join(reasons)}")
             if "rlc" in spec or constraints.get("response_family") is not None:
                 return ("rlc_lowpass_2nd_order", conf, f"Matched by: {', '.join(reasons)}")
             return ("rc_lowpass", conf, f"Matched by: {', '.join(reasons)}")
@@ -296,6 +391,8 @@ class TopologyAgent(BaseAgent):
             (constraints.get("target_iout_a") is not None, 0.20, "target_iout_a present"),
         ])
         if conf >= 0.50:
+            if "wide swing" in spec or "low compliance" in spec:
+                return ("wide_swing_current_mirror", conf, f"Matched by: {', '.join(reasons)}")
             if "widlar" in spec:
                 return ("widlar_current_mirror", conf, f"Matched by: {', '.join(reasons)}")
             if "wilson" in spec:
@@ -304,16 +401,41 @@ class TopologyAgent(BaseAgent):
                 return ("cascode_current_mirror", conf, f"Matched by: {', '.join(reasons)}")
             return ("current_mirror", conf, f"Matched by: {', '.join(reasons)}")
 
+        has_tia_hint = (
+            ("transimpedance" in spec)
+            or (re.search(r"\btia\b", spec) is not None)
+            or ("sensor front-end" in spec)
+            or ("sensor frontend" in spec)
+        )
+        conf, reasons = self._score_match([
+            (has_tia_hint, 0.65, "transimpedance/sensor wording"),
+            (constraints.get("target_transimpedance_ohm") is not None, 0.25, "target_transimpedance_ohm present"),
+        ])
+        if conf >= 0.50:
+            return ("transimpedance_frontend", conf, f"Matched by: {', '.join(reasons)}")
+
         conf, reasons = self._score_match([
             ("differential pair" in spec or "diff pair" in spec or "differential front-end" in spec, 0.45, "differential wording"),
         ])
         if conf >= 0.45:
+            if "active load" in spec:
+                return ("diff_pair_active_load", conf, f"Matched by: {', '.join(reasons)}")
+            if "current mirror load" in spec or "mirror load" in spec:
+                return ("diff_pair_current_mirror_load", conf, f"Matched by: {', '.join(reasons)}")
+            if "resistor load" in spec:
+                return ("diff_pair_resistor_load", conf, f"Matched by: {', '.join(reasons)}")
             return ("diff_pair", conf, f"Matched by: {', '.join(reasons)}")
 
         conf, reasons = self._score_match([
             ("source follower" in spec or "common-drain" in spec or "common drain" in spec, 0.55, "source follower wording"),
         ])
         if conf >= 0.50:
+            if "adc input buffer" in spec:
+                return ("adc_input_buffer", conf, f"Matched by: {', '.join(reasons)}")
+            if "adc reference buffer" in spec:
+                return ("adc_reference_buffer", conf, f"Matched by: {', '.join(reasons)}")
+            if "dac output buffer" in spec:
+                return ("dac_output_buffer", conf, f"Matched by: {', '.join(reasons)}")
             return ("common_drain", conf, f"Matched by: {', '.join(reasons)}")
 
         conf, reasons = self._score_match([
@@ -401,6 +523,10 @@ class TopologyAgent(BaseAgent):
             (low_power_bias, 0.10, "tight power budget"),
         ])
         if conf >= 0.50:
+            if "telescopic" in spec:
+                return ("telescopic_cascode_opamp_core", conf, f"Matched by: {', '.join(reasons)}")
+            if "ldo error amp" in spec or "error amplifier" in spec:
+                return ("ldo_error_amp_core", conf, f"Matched by: {', '.join(reasons)}")
             return ("two_stage_miller", conf, f"Matched by: {', '.join(reasons)}")
 
         conf, reasons = self._score_match([
@@ -408,7 +534,36 @@ class TopologyAgent(BaseAgent):
             (constraints.get("input_overdrive_v") is not None, 0.15, "input_overdrive_v present"),
         ])
         if conf >= 0.50:
+            if "static comparator" in spec:
+                return ("static_comparator", conf, f"Matched by: {', '.join(reasons)}")
+            if "latched comparator" in spec or "dynamic comparator" in spec:
+                return ("latched_comparator", conf, f"Matched by: {', '.join(reasons)}")
             return ("comparator", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("anti-alias" in spec or "anti alias" in spec, 0.65, "anti-alias wording"),
+            ("adc" in spec, 0.15, "adc wording"),
+        ])
+        if conf >= 0.50:
+            return ("adc_anti_alias_rc", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("reference conditioning" in spec or "dac reference conditioning" in spec, 0.65, "reference conditioning wording"),
+        ])
+        if conf >= 0.50:
+            return ("dac_reference_conditioning", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("compensation network" in spec or "compensation helper" in spec, 0.65, "compensation wording"),
+        ])
+        if conf >= 0.50:
+            return ("compensation_network_helper", conf, f"Matched by: {', '.join(reasons)}")
+
+        conf, reasons = self._score_match([
+            ("current sense amplifier" in spec or "current-sense amplifier" in spec, 0.65, "current-sense wording"),
+        ])
+        if conf >= 0.50:
+            return ("current_sense_amp_helper", conf, f"Matched by: {', '.join(reasons)}")
 
         conf, reasons = self._score_match([
             (

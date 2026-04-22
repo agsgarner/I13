@@ -1,0 +1,2 @@
+# Optional backend dependency for OpenAI-powered planning
+openai>=1.0

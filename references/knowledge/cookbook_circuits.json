@@ -1,0 +1,53 @@
+{
+  "schema": "reference_bundle",
+  "content_type": "cookbook_circuit",
+  "items": [
+    {
+      "id": "cookbook-analog-rc-filter",
+      "title": "Analog Cookbook RC Filter",
+      "schema": "analog_cookbook_circuit",
+      "topologies": ["rc_lowpass", "adc_anti_alias_rc", "dac_reference_conditioning", "compensation_network_helper"],
+      "tags": ["cookbook", "filter", "starter"],
+      "summary": "Reusable first-order RC block for anti-aliasing, deglitching, and loop-shaping helpers.",
+      "data": {
+        "default_constraints": {
+          "vin_ac": 1.0,
+          "vin_step": 0.1
+        },
+        "recommended_metrics": ["fc_hz", "settling_time_s"],
+        "use_cases": ["anti-alias filtering", "reference conditioning", "compensation helper"]
+      }
+    },
+    {
+      "id": "cookbook-composite-gain-buffer",
+      "title": "Gain Stage Followed by Buffer",
+      "schema": "analog_cookbook_circuit",
+      "topologies": ["composite_pipeline", "common_source_res_load", "common_drain"],
+      "tags": ["cookbook", "pipeline", "buffer"],
+      "summary": "Classic gain-plus-buffer chain for demos that need visible stage composition and a simple output driver.",
+      "data": {
+        "stage_topologies": ["common_source_res_load", "common_drain"],
+        "default_constraints": {
+          "interstage_res_ohm": 2000.0,
+          "interstage_cap_f": 5e-13
+        },
+        "recommended_metrics": ["gain_db", "bandwidth_hz", "power_mw"]
+      }
+    },
+    {
+      "id": "cookbook-differential-front-end",
+      "title": "Differential Front-End with Active Load",
+      "schema": "analog_cookbook_circuit",
+      "topologies": ["diff_pair_active_load", "diff_pair_current_mirror_load", "current_sense_amp_helper"],
+      "tags": ["cookbook", "front_end", "differential"],
+      "summary": "Reusable differential front-end motif for moderate gain with differential sensing or current-sense helper behavior.",
+      "data": {
+        "default_constraints": {
+          "target_vov_v": 0.18,
+          "power_limit_mw": 2.0
+        },
+        "recommended_metrics": ["gain_db", "bandwidth_hz", "power_mw"]
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # I13/core/shared_memory.py
 
-from datetime import datetime
+from datetime import datetime, timezone
 from copy import deepcopy
 from agents.design_status import DesignStatus
 
@@ -13,6 +13,11 @@ class SharedMemory:
             "selected_topologies": None,
             "topology_plan": None,
             "topology_metadata": None,
+            "reference_catalog_summary": None,
+            "topology_reference_summary": None,
+            "sizing_reference_summary": None,
+            "netlist_reference_summary": None,
+            "verification_reference_summary": None,
             "constraints": None,
             "sizing": None,
             "netlist": None,
@@ -39,7 +44,7 @@ class SharedMemory:
 
     def append_history(self, event, data):
         self.state["history"].append({
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": event,
             "data": deepcopy(data)
         })

@@ -1,0 +1,57 @@
+{
+  "schema": "reference_bundle",
+  "content_type": "example_netlist",
+  "items": [
+    {
+      "id": "netlist-rc-lowpass-minimal",
+      "title": "Known-Good RC Low-Pass Skeleton",
+      "schema": "example_netlist",
+      "topologies": ["rc_lowpass", "adc_anti_alias_rc", "dac_reference_conditioning"],
+      "tags": ["netlist", "filter", "skeleton"],
+      "summary": "Minimal stimulus, control block, and output data collection for a first-order RC section.",
+      "data": {
+        "suggested_analyses": ["ac", "tran"],
+        "netlist_excerpt": [
+          "Vin in 0 DC 0 AC 1 PULSE(0 1 0 1u 1u 20m 40m)",
+          "R1 in out <R_ohm>",
+          "C1 out 0 <C_f>"
+        ],
+        "provenance": "generic demo skeleton"
+      }
+    },
+    {
+      "id": "netlist-common-source-openloop",
+      "title": "Known-Good Common-Source Skeleton",
+      "schema": "example_netlist",
+      "topologies": ["common_source_res_load", "source_degenerated_cs", "common_source_active_load"],
+      "tags": ["netlist", "amplifier", "skeleton"],
+      "summary": "Basic common-source biasing and AC probing scaffold for a single-ended gain stage.",
+      "data": {
+        "suggested_analyses": ["op", "ac", "tran"],
+        "netlist_excerpt": [
+          "VDD vdd 0 <supply_v>",
+          "VIN in 0 DC <vin_dc> AC <vin_ac>",
+          "M1 out in 0 0 NMOS W=<W_m> L=<L_m>"
+        ],
+        "provenance": "generic demo skeleton"
+      }
+    },
+    {
+      "id": "netlist-two-stage-opamp-skeleton",
+      "title": "Known-Good Two-Stage Op-Amp Skeleton",
+      "schema": "example_netlist",
+      "topologies": ["two_stage_miller", "ldo_error_amp_core", "folded_cascode_opamp"],
+      "tags": ["netlist", "opamp", "skeleton"],
+      "summary": "Open-loop op-amp scaffold with compensation and AC plus transient probes.",
+      "data": {
+        "suggested_analyses": ["op", "ac", "tran"],
+        "netlist_excerpt": [
+          "Ccomp n1 out <Cc_f>",
+          "AC DEC 20 10 1e9",
+          "TRAN 1n 5u"
+        ],
+        "provenance": "generic demo skeleton"
+      }
+    }
+  ]
+}

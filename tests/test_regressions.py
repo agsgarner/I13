@@ -7,8 +7,11 @@ from agents.topology_agent import TopologyAgent
 from agents.op_point_agent import OpPointAgent
 from agents.simulation_agent import SimulationAgent
 from agents.refinement_agent import RefinementAgent
+from agents.design_status import DesignStatus
 from core.demo_catalog import get_demo_profile, stable_demo_cases
 from core.shared_memory import SharedMemory
+from core.verification_pipeline import build_structured_verification
+from flow.design_flow import FinalizeNode
 from main import format_final_report, run_case, run_preflight
 
 
@@ -93,6 +96,13 @@ class DemoRegressionTests(unittest.TestCase):
         sim = final_state["simulation_results"]
         self.assertGreater(sim.get("gain_db", 0.0), 50.0)
 
+    def test_verification_summary_exposes_requirement_evaluations(self):
+        final_state = self._run_case("rc")
+        verification = (final_state.get("simulation_results") or {}).get("verification_summary") or {}
+        self.assertIn("overall_verdict", verification)
+        self.assertTrue(isinstance(verification.get("requirement_evaluations"), list))
+        self.assertGreaterEqual(len(verification.get("requirement_evaluations") or []), 1)
+
 
 class DemoProfileTests(unittest.TestCase):
     def test_ti_safe_profile_uses_curated_cases(self):
@@ -101,10 +111,13 @@ class DemoProfileTests(unittest.TestCase):
         self.assertIn("bandgap_reference", profile)
         self.assertNotIn("wilson_mirror", profile)
 
-    def test_ti_grand_demo_profile_includes_multi_stage_cases(self):
-        profile = get_demo_profile("ti_grand_demo")
+    def test_ti_final_demo_profile_includes_multi_stage_cases(self):
+        profile = get_demo_profile("ti_final_demo")
         self.assertIn("ti_filter_amp_chain", profile)
         self.assertIn("ti_three_stage_amp", profile)
+
+    def test_ti_grand_demo_alias_still_resolves(self):
+        self.assertEqual(get_demo_profile("ti_grand_demo"), get_demo_profile("ti_final_demo"))
 
     def test_stable_case_list_excludes_experimental_case(self):
         stable_cases = stable_demo_cases()
@@ -164,9 +177,22 @@ quit
     def test_final_report_includes_spec_and_netlist_provenance(self):
         final_state = run_case("rc")
         report = format_final_report("rc", final_state)
-        self.assertIn("Specification:", report)
+        self.assertIn("Requested specification:", report)
+        self.assertIn("Selected topology:", report)
+        self.assertIn("Sizing Summary:", report)
+        self.assertIn("Simulation Analyses Actually Run:", report)
+        self.assertIn("Extracted Metrics:", report)
+        self.assertIn("Requirement Status:", report)
+        self.assertIn("Overall verdict:", report)
+        self.assertIn("Artifact File Paths:", report)
         self.assertIn("Simulated netlist:", report)
         self.assertIn("Simulation provenance:", report)
+
+    def test_final_report_includes_requirement_assessment_labels(self):
+        final_state = run_case("mirror")
+        report = format_final_report("mirror", final_state)
+        self.assertIn("assessment=fully_verified", report)
+        self.assertIn("Requirement Status:", report)
 
 
 class CharacterizationAndRefinementTests(unittest.TestCase):
@@ -225,6 +251,46 @@ class CharacterizationAndRefinementTests(unittest.TestCase):
         self.assertTrue(report.changed)
         self.assertIn("L_h", report.changes)
         self.assertNotEqual(new_state["sizing"]["L_h"], 1e-3)
+
+
+class FlowStatusTests(unittest.TestCase):
+    def test_finalize_uses_structured_verification_status(self):
+        memory = SharedMemory()
+        memory.write(
+            "simulation_results",
+            {"verification_summary": {"final_status": "fail", "overall_verdict": "failed"}},
+        )
+
+        FinalizeNode().post(memory, None, None)
+
+        self.assertEqual(memory.read("status"), DesignStatus.DESIGN_INVALID)
+
+    def test_bandwidth_target_is_treated_as_minimum_requirement(self):
+        summary = build_structured_verification(
+            topology="gm_stage",
+            plan={"analyses": ["ac"]},
+            constraints={"target_bw_hz": 1.0e6},
+            sizing={},
+            sim={},
+            legacy_summary={},
+            analysis_metrics={
+                "per_analysis": {
+                    "op": {"metrics": {}},
+                    "dc": {"metrics": {}},
+                    "ac": {"metrics": {"bandwidth_hz": 2.0e6}},
+                    "tran": {"metrics": {}},
+                    "noise": {"metrics": {}},
+                },
+                "flat_metrics": {"bandwidth_hz": 2.0e6},
+            },
+            log_text="",
+        )
+
+        requirement = next(
+            item for item in summary.get("requirement_evaluations", []) if item.get("requirement") == "bandwidth_hz"
+        )
+        self.assertEqual(requirement.get("status"), "pass")
+        self.assertEqual(requirement.get("assessment"), "fully_verified")
 
 
 if __name__ == "__main__":

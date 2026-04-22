@@ -4,6 +4,7 @@ import math
 from agents.base_agent import BaseAgent
 from agents.design_status import DesignStatus
 from core.shared_memory import SharedMemory
+from core.topology_aliases import canonical_topology_key
 
 
 @dataclass
@@ -50,6 +51,7 @@ class SizingAgent(BaseAgent):
         constraints = state.get("constraints", {})
         topology = state.get("selected_topology")
         topology_plan = state.get("topology_plan") or {}
+        reference_summary = {"used": [], "applied_defaults": {}}
 
         if not topology:
             memory.write("status", DesignStatus.SIZING_FAILED)
@@ -57,9 +59,27 @@ class SizingAgent(BaseAgent):
             return state
 
         if topology == "composite_pipeline" or (topology_plan.get("mode") == "composite"):
-            state, report = self._size_composite_pipeline(state, constraints, topology_plan, memory=memory)
+            state, report, reference_summary = self._size_composite_pipeline(
+                state,
+                constraints,
+                topology_plan,
+                memory=memory,
+            )
         else:
-            state, report = self._size_for_topology(topology, state, constraints)
+            effective_topology = canonical_topology_key(topology)
+            effective_constraints, reference_summary = self._apply_reference_defaults(
+                effective_topology,
+                constraints,
+                memory=memory,
+            )
+            state, report = self._size_for_topology(effective_topology, state, effective_constraints)
+            if report.success and effective_topology != topology:
+                report.notes.append(
+                    f"Applied sizing heuristics from '{effective_topology}' for aliased topology '{topology}'."
+                )
+            if report.success and reference_summary.get("applied_defaults"):
+                applied = ", ".join(sorted(reference_summary["applied_defaults"]))
+                report.notes.append(f"Applied reference defaults for sizing: {applied}.")
 
         if not report.success:
             memory.write("status", DesignStatus.SIZING_FAILED)
@@ -68,12 +88,15 @@ class SizingAgent(BaseAgent):
 
         memory.write("sizing", state["sizing"])
         memory.write("sizing_report", report.__dict__)
+        memory.write("sizing_reference_summary", reference_summary)
         memory.write("status", DesignStatus.SIZING_COMPLETE)
         return state
 
     def _size_for_topology(self, topology, state, constraints):
         if topology == "rc_lowpass":
             return self._size_rc_lowpass(state, constraints)
+        if topology == "compensation_network_helper":
+            return self._size_compensation_network_helper(state, constraints)
         if topology == "rlc_lowpass_2nd_order":
             return self._size_rlc_lowpass_2nd_order(state, constraints)
         if topology == "rlc_highpass_2nd_order":
@@ -84,6 +107,8 @@ class SizingAgent(BaseAgent):
             return self._size_common_source_res_load(state, constraints)
         if topology == "diff_pair":
             return self._size_diff_pair(state, constraints)
+        if topology in {"diff_pair_current_mirror_load", "diff_pair_active_load"}:
+            return self._size_diff_pair_active_load(state, constraints)
         if topology == "bjt_diff_pair":
             return self._size_bjt_diff_pair(state, constraints)
         if topology == "current_mirror":
@@ -92,6 +117,8 @@ class SizingAgent(BaseAgent):
             return self._size_wilson_current_mirror(state, constraints)
         if topology == "cascode_current_mirror":
             return self._size_cascode_current_mirror(state, constraints)
+        if topology == "wide_swing_current_mirror":
+            return self._size_wide_swing_current_mirror(state, constraints)
         if topology == "widlar_current_mirror":
             return self._size_widlar_current_mirror(state, constraints)
         if topology == "two_stage_miller":
@@ -120,14 +147,18 @@ class SizingAgent(BaseAgent):
             return self._size_lc_oscillator(state, constraints)
         if topology == "bandgap_reference_core":
             return self._size_bandgap_reference(state, constraints)
-        if topology == "comparator":
+        if topology in {"comparator", "latched_comparator", "static_comparator"}:
             return self._size_comparator(state, constraints)
+        if topology == "transimpedance_frontend":
+            return self._size_transimpedance_frontend(state, constraints)
+        if topology == "current_sense_amp_helper":
+            return self._size_current_sense_amp_helper(state, constraints)
         return state, SizingReport(False, [f"Sizing not implemented for {topology}"])
 
     def _size_composite_pipeline(self, state, constraints, topology_plan, memory: SharedMemory = None):
         stages = (topology_plan or {}).get("stages") or []
         if len(stages) < 2:
-            return state, SizingReport(False, ["Composite pipeline requires at least two valid stages."])
+            return state, SizingReport(False, ["Composite pipeline requires at least two valid stages."]), {"used": [], "applied_defaults": {}}
 
         llm_hints = self._llm_composite_sizing_hints(stages, constraints, memory=memory)
         llm_stage_constraints = llm_hints.get("stage_constraints") or []
@@ -136,17 +167,27 @@ class SizingAgent(BaseAgent):
         composite_stages = []
         notes = list(llm_notes)
         estimated_gain_db = 0.0
+        used_hits = []
+        applied_defaults = {}
 
         for idx, stage in enumerate(stages):
             topology = stage.get("topology")
             if not topology:
-                return state, SizingReport(False, [f"Stage {idx + 1} is missing topology."])
+                return state, SizingReport(False, [f"Stage {idx + 1} is missing topology."]), {"used": used_hits, "applied_defaults": applied_defaults}
 
             stage_specific_constraints = stage.get("constraints") or {}
             stage_constraints = dict(constraints)
             stage_constraints.update(stage_specific_constraints)
             if idx < len(llm_stage_constraints) and isinstance(llm_stage_constraints[idx], dict):
                 stage_constraints.update(llm_stage_constraints[idx])
+            stage_constraints, stage_reference_summary = self._apply_reference_defaults(
+                topology,
+                stage_constraints,
+                memory=memory,
+            )
+            used_hits.extend(stage_reference_summary.get("used") or [])
+            for key, value in (stage_reference_summary.get("applied_defaults") or {}).items():
+                applied_defaults[f"{stage.get('name') or f'stage{idx + 1}'}::{key}"] = value
 
             stage_state = {
                 "case_metadata": state.get("case_metadata") or {},
@@ -157,6 +198,11 @@ class SizingAgent(BaseAgent):
                 return state, SizingReport(
                     False,
                     [f"Stage {idx + 1} sizing failed for topology '{topology}': {', '.join(stage_report.notes)}"],
+                ), {"used": used_hits, "applied_defaults": applied_defaults}
+            if stage_reference_summary.get("applied_defaults"):
+                stage_report.notes.append(
+                    "Applied reference defaults: "
+                    + ", ".join(sorted(stage_reference_summary["applied_defaults"]))
                 )
 
             stage_sizing = stage_state.get("sizing") or {}
@@ -189,7 +235,41 @@ class SizingAgent(BaseAgent):
             f"Composite sizing complete with {len(composite_stages)} stages "
             f"(estimated total gain ~ {estimated_gain_db:.2f} dB)."
         )
-        return state, SizingReport(True, notes)
+        return state, SizingReport(True, notes), {"used": used_hits, "applied_defaults": applied_defaults}
+
+    def _apply_reference_defaults(self, topology, constraints, memory: SharedMemory = None):
+        hits = []
+        if memory is not None:
+            hits = self.retrieve_references(
+                memory,
+                query=f"{topology} sizing defaults",
+                topologies=[topology],
+                content_types=[
+                    "template",
+                    "device_selection_heuristic",
+                    "cookbook_circuit",
+                    "design_equation",
+                ],
+                limit=6,
+                trace_label=f"sizing_defaults::{topology}",
+            )
+
+        merged = dict(constraints)
+        applied_defaults = {}
+        for hit in hits:
+            data = hit.get("data") or {}
+            for bucket in ("default_constraints", "heuristic_defaults", "constraint_defaults"):
+                defaults = data.get(bucket) or {}
+                if not isinstance(defaults, dict):
+                    continue
+                for key, value in defaults.items():
+                    if merged.get(key) is None:
+                        merged[key] = value
+                        applied_defaults[key] = {
+                            "value": value,
+                            "source": hit.get("id"),
+                        }
+        return merged, {"used": hits, "applied_defaults": applied_defaults}
 
     def _llm_composite_sizing_hints(self, stages, constraints, memory: SharedMemory = None):
         if self.llm is None:
@@ -267,6 +347,22 @@ class SizingAgent(BaseAgent):
             "C_f": C
         }
         return state, SizingReport(True, ["RC low-pass sized from target cutoff"])
+
+    def _size_compensation_network_helper(self, state, constraints):
+        fc = float(constraints.get("target_fc_hz", 200e3))
+        cc = float(constraints.get("Cc_f", constraints.get("fixed_cap_f", 2e-12)))
+        rz = 1.0 / (2.0 * math.pi * max(fc, 1e-3) * max(cc, 1e-18))
+        state["sizing"] = {
+            "R_ohm": rz,
+            "C_f": cc,
+            "Rz_ohm": rz,
+            "Cc_f": cc,
+            "target_fc_hz": fc,
+        }
+        return state, SizingReport(
+            True,
+            ["Compensation helper sized from target pole/zero break frequency."],
+        )
 
     def _filter_q_from_constraints(self, constraints, default_family="butterworth"):
         if constraints.get("q_target") is not None:
@@ -462,6 +558,19 @@ class SizingAgent(BaseAgent):
         self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_tail", ro_current_factor=0.5)
         return state, SizingReport(True, ["MOS differential pair initial sizing complete"])
 
+    def _size_diff_pair_active_load(self, state, constraints):
+        state, report = self._size_diff_pair(state, constraints)
+        vov_p = float(constraints.get("target_vov_p_v", 0.22))
+        mu_p = float(constraints.get("mu_cox_p_a_per_v2", 80e-6))
+        l_load = float(constraints.get("L_load_m", state["sizing"].get("L_in", 180e-9)))
+        i_half = 0.5 * float(state["sizing"].get("I_tail", 40e-6))
+        w_load = max(0.5, 2.0 * max(i_half, 1e-9) / max(mu_p * vov_p**2, 1e-30)) * l_load
+        state["sizing"]["W_load"] = w_load
+        state["sizing"]["L_load"] = l_load
+        state["sizing"]["Vov_load_target"] = vov_p
+        report.notes.append("Added PMOS active-load sizing for differential pair front-end.")
+        return state, report
+
     def _size_bjt_diff_pair(self, state, constraints):
         I_tail = float(constraints.get("tail_current_a", 200e-6))
         beta = float(constraints.get("beta", 100))
@@ -524,6 +633,17 @@ class SizingAgent(BaseAgent):
         state["sizing"]["L_cas"] = l_cas
         state["sizing"]["Vbias_cas"] = float(constraints.get("Vbias_cas_v", 0.9))
         report.notes.append("Cascode mirror adds cascode device sizing for higher output resistance.")
+        return state, report
+
+    def _size_wide_swing_current_mirror(self, state, constraints):
+        state, report = self._size_cascode_current_mirror(state, constraints)
+        state["sizing"]["W_cas"] = 0.9 * float(state["sizing"]["W_cas"])
+        state["sizing"]["Vbias_cas"] = float(constraints.get("Vbias_cas_v", 0.72))
+        state["sizing"]["compliance_v_est"] = max(
+            float(constraints.get("compliance_v", 0.45)),
+            2.0 * float(constraints.get("target_vov_v", 0.15)),
+        )
+        report.notes.append("Wide-swing mirror variant biases cascodes for lower compliance headroom.")
         return state, report
 
     def _size_widlar_current_mirror(self, state, constraints):
@@ -710,6 +830,40 @@ class SizingAgent(BaseAgent):
         rs = max(10.0, (max(gm, 1e-9) / gain_lin - 1.0) / max(gm, 1e-9))
         state["sizing"]["R_S"] = max(10.0, rs)
         report.notes.append("Added source degeneration resistor for gain linearization.")
+        return state, report
+
+    def _size_transimpedance_frontend(self, state, constraints):
+        target_bw = float(constraints.get("target_bw_hz", 500e3))
+        z_target = constraints.get("target_transimpedance_ohm")
+        if z_target is None:
+            z_target = 10 ** (float(constraints.get("target_gain_db", 70.0)) / 20.0)
+        z_target = float(z_target)
+        c_feedback = max(0.2e-12, 1.0 / (2.0 * math.pi * max(target_bw, 1.0) * max(z_target, 1e-3)))
+        gm_input = max(0.5e-3, 2.0 * math.pi * target_bw * c_feedback)
+        vdd = float(constraints.get("supply_v", 1.8))
+        power_limit = float(constraints.get("power_limit_mw", 2.0))
+        ibias = max(20e-6, min(power_limit / 1000.0 / max(vdd, 1e-9), gm_input * 0.12))
+        state["sizing"] = {
+            "R_feedback_ohm": z_target,
+            "C_feedback_f": c_feedback,
+            "gm_input_s": gm_input,
+            "I_bias": ibias,
+            "target_transimpedance_ohm": z_target,
+        }
+        return state, SizingReport(
+            True,
+            [
+                "Transimpedance front-end sized from target Zt and bandwidth.",
+                f"Feedback R ≈ {z_target:.3e} ohm, C ≈ {c_feedback:.3e} F.",
+            ],
+        )
+
+    def _size_current_sense_amp_helper(self, state, constraints):
+        sense_constraints = dict(constraints)
+        sense_constraints.setdefault("R_load_ohm", float(constraints.get("R_load_ohm", 6000.0)))
+        sense_constraints.setdefault("target_vov_v", float(constraints.get("target_vov_v", 0.18)))
+        state, report = self._size_diff_pair(state, sense_constraints)
+        report.notes.append("Current-sense helper uses differential front-end sizing baseline.")
         return state, report
 
     def _size_common_source_active_load(self, state, constraints):

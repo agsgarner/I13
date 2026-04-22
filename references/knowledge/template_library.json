@@ -1,0 +1,120 @@
+{
+  "schema": "reference_bundle",
+  "content_type": "template",
+  "items": [
+    {
+      "id": "template-opamp-two-stage-miller",
+      "title": "Two-Stage Miller Op-Amp Starter Template",
+      "schema": "op_amp_stage_template",
+      "topologies": ["two_stage_miller"],
+      "tags": ["template", "opamp", "starter"],
+      "summary": "Vendor-neutral two-stage op-amp template with compensation-oriented defaults.",
+      "data": {
+        "default_constraints": {
+          "phase_margin_deg": 60.0,
+          "target_vov_v": 0.18,
+          "load_cap_f": 1e-12
+        },
+        "sizing_defaults": {
+          "gm_id_target_s_per_a": 10.0,
+          "compensation_style": "miller"
+        },
+        "future_extension_points": ["vendor_model_ref", "process_corner", "loop_stability_notes"]
+      }
+    },
+    {
+      "id": "template-opamp-folded-cascode-core",
+      "title": "Folded Cascode Op-Amp Core Starter",
+      "schema": "op_amp_stage_template",
+      "topologies": ["folded_cascode_opamp", "folded_cascode_opamp_core"],
+      "tags": ["template", "opamp", "low_headroom"],
+      "summary": "Starter template for folded-cascode OTA style blocks.",
+      "data": {
+        "default_constraints": {
+          "target_vov_v": 0.16,
+          "power_limit_mw": 2.0
+        },
+        "sizing_defaults": {
+          "gm_id_target_s_per_a": 12.0
+        },
+        "future_extension_points": ["vendor_model_ref", "cmfb_strategy"]
+      }
+    },
+    {
+      "id": "template-current-mirror-basic",
+      "title": "Basic Current Mirror Starter",
+      "schema": "current_mirror_template",
+      "topologies": ["current_mirror"],
+      "tags": ["template", "mirror", "bias"],
+      "summary": "Starter template for generic current-copy branches.",
+      "data": {
+        "default_constraints": {
+          "mirror_ratio": 1.0,
+          "target_vov_v": 0.18
+        },
+        "future_extension_points": ["vendor_model_ref", "compliance_model"]
+      }
+    },
+    {
+      "id": "template-current-mirror-cascode",
+      "title": "Cascode Mirror Starter",
+      "schema": "current_mirror_template",
+      "topologies": ["cascode_current_mirror", "wide_swing_current_mirror"],
+      "tags": ["template", "mirror", "high_output_resistance"],
+      "summary": "Starter template for higher-output-resistance mirror branches.",
+      "data": {
+        "default_constraints": {
+          "target_vov_v": 0.18,
+          "compliance_v": 0.9
+        },
+        "future_extension_points": ["vendor_model_ref", "cascode_bias_generator"]
+      }
+    },
+    {
+      "id": "template-adc-driver-buffer",
+      "title": "ADC Driver and Reference Buffer Starter",
+      "schema": "adc_dac_driver_template",
+      "topologies": ["adc_input_buffer", "adc_reference_buffer", "dac_output_buffer"],
+      "tags": ["template", "data_converter", "driver"],
+      "summary": "Vendor-neutral source-follower style driver template for ADC and DAC support paths.",
+      "data": {
+        "default_constraints": {
+          "target_gm_s": 0.002,
+          "target_vout_q_v": 0.75,
+          "target_vov_v": 0.2
+        },
+        "future_extension_points": ["vendor_model_ref", "settling_window", "distortion_budget"]
+      }
+    },
+    {
+      "id": "template-power-helper-family",
+      "title": "Power Helper Starter",
+      "schema": "power_stage_helper_template",
+      "topologies": ["ldo_error_amp_core", "compensation_network_helper", "current_sense_amp_helper"],
+      "tags": ["template", "power", "helper"],
+      "summary": "Starter template for power-management support blocks without vendor lock-in.",
+      "data": {
+        "default_constraints": {
+          "power_limit_mw": 2.0,
+          "target_fc_hz": 100000.0
+        },
+        "future_extension_points": ["vendor_model_ref", "stability_corner_set", "sense_shunt_range"]
+      }
+    },
+    {
+      "id": "template-analog-cookbook-circuit",
+      "title": "Analog Cookbook Circuit Template",
+      "schema": "analog_cookbook_circuit",
+      "topologies": ["rc_lowpass", "composite_pipeline", "diff_pair_active_load"],
+      "tags": ["template", "cookbook", "starter"],
+      "summary": "Starter template bundle for reusable cookbook circuits.",
+      "data": {
+        "default_constraints": {
+          "vin_ac": 1.0,
+          "vin_step": 0.05
+        },
+        "future_extension_points": ["vendor_model_ref", "application_domain", "measured_reference_design"]
+      }
+    }
+  ]
+}

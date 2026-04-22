@@ -20,6 +20,7 @@ class RefinementAgent(BaseAgent):
     def __init__(
         self,
         llm=None,
+        reference_catalog=None,
         max_step_up: float = 1.5,
         max_step_down: float = 0.7,
         min_factor: float = 0.2,
@@ -27,7 +28,7 @@ class RefinementAgent(BaseAgent):
         max_retries: int = 1,
         wait: float = 0,
     ):
-        super().__init__(llm=llm, max_retries=max_retries, wait=wait)
+        super().__init__(llm=llm, reference_catalog=reference_catalog, max_retries=max_retries, wait=wait)
         self.max_step_up = max_step_up
         self.max_step_down = max_step_down
         self.min_factor = min_factor
@@ -43,6 +44,20 @@ class RefinementAgent(BaseAgent):
 
         if not topo:
             report = RefinementReport(False, {}, ["No topology found"], "stop")
+            memory.write("refinement_report", report.__dict__)
+            memory.write("status", DesignStatus.REFINEMENT_SKIPPED)
+            return state, report
+
+        if sim.get("simulation_skipped"):
+            report = RefinementReport(
+                changed=False,
+                changes={},
+                notes=[
+                    sim.get("skip_reason")
+                    or "Simulation was skipped; refinement is bypassed in degraded mode."
+                ],
+                next_action="stop",
+            )
             memory.write("refinement_report", report.__dict__)
             memory.write("status", DesignStatus.REFINEMENT_SKIPPED)
             return state, report
@@ -99,7 +114,7 @@ class RefinementAgent(BaseAgent):
         if (
             self.llm is not None
             and not report.changed
-            and (sim.get("verification_summary") or {}).get("fails", 0) > 0
+            and (sim.get("verification_summary") or {}).get("final_status") == "fail"
             and isinstance(state.get("sizing"), dict)
             and "stages" not in (state.get("sizing") or {})
             and state.get("status") != DesignStatus.REFINEMENT_FAILED

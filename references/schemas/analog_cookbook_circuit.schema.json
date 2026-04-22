@@ -1,0 +1,23 @@
+{
+  "id": "schema-analog-cookbook-circuit",
+  "title": "Analog Cookbook Circuit Schema",
+  "schema": "schema_definition",
+  "content_type": "schema_definition",
+  "summary": "Starter schema for reusable cookbook-style reference circuits.",
+  "data": {
+    "record_type": "analog_cookbook_circuit",
+    "required_fields": ["id", "title", "schema", "topologies", "summary"],
+    "recommended_fields": ["default_constraints", "stage_topologies", "recommended_metrics", "future_extension_points"],
+    "example_stub": {
+      "id": "cookbook-example",
+      "title": "Generic Cookbook Entry",
+      "schema": "analog_cookbook_circuit",
+      "topologies": ["rc_lowpass"],
+      "summary": "Describe when this circuit should be reused.",
+      "data": {
+        "default_constraints": {"target_fc_hz": 1000.0},
+        "recommended_metrics": ["fc_hz"]
+      }
+    }
+  }
+}

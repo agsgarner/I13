@@ -8,10 +8,10 @@ class FinalizeNode(Node):
     def post(self, shared, prep_res, exec_res):
         sim = shared.read("simulation_results") or {}
         verification = sim.get("verification_summary") or {}
-        if verification.get("fails", 0) > 0:
-            shared.write("status", DesignStatus.DESIGN_INVALID)
-        else:
+        if verification.get("final_status") == "pass":
             shared.write("status", DesignStatus.DESIGN_VALIDATED)
+        else:
+            shared.write("status", DesignStatus.DESIGN_INVALID)
         return "done"
 
 

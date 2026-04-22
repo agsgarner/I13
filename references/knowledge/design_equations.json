@@ -1,0 +1,57 @@
+{
+  "schema": "reference_bundle",
+  "content_type": "design_equation",
+  "items": [
+    {
+      "id": "eq-rc-cutoff",
+      "title": "RC Cutoff Equation",
+      "schema": "design_equation",
+      "topologies": ["rc_lowpass", "adc_anti_alias_rc", "dac_reference_conditioning", "compensation_network_helper"],
+      "tags": ["filter", "cutoff", "cookbook"],
+      "summary": "First-order cutoff estimate for RC sections.",
+      "data": {
+        "equation": "fc = 1 / (2*pi*R*C)",
+        "variables": {
+          "fc_hz": "cutoff frequency in hertz",
+          "R_ohm": "resistance in ohms",
+          "C_f": "capacitance in farads"
+        },
+        "design_roles": ["sizing", "verification"]
+      }
+    },
+    {
+      "id": "eq-mos-gm-overdrive",
+      "title": "Long-Channel MOS gm Estimate",
+      "schema": "design_equation",
+      "topologies": ["common_source_res_load", "source_degenerated_cs", "common_gate", "common_drain", "gm_stage", "diff_pair"],
+      "tags": ["gm", "overdrive", "mos"],
+      "summary": "First-pass gm estimate from bias current and overdrive.",
+      "data": {
+        "equation": "gm ~= 2*Id/Vov",
+        "variables": {
+          "gm_s": "transconductance in siemens",
+          "Id_a": "drain current in amperes",
+          "Vov_v": "device overdrive in volts"
+        },
+        "design_roles": ["sizing", "sanity_check"]
+      }
+    },
+    {
+      "id": "eq-opamp-ugbw",
+      "title": "Op-Amp UGBW Estimate",
+      "schema": "design_equation",
+      "topologies": ["two_stage_miller", "folded_cascode_opamp", "telescopic_cascode_opamp_core", "ldo_error_amp_core"],
+      "tags": ["ugbw", "opamp", "compensation"],
+      "summary": "Estimate unity-gain bandwidth from input-stage gm and effective load or compensation capacitor.",
+      "data": {
+        "equation": "UGBW ~= gm1 / (2*pi*Cdom)",
+        "variables": {
+          "ugbw_hz": "unity-gain bandwidth in hertz",
+          "gm1_target_s": "input-stage transconductance",
+          "Cdom_f": "dominant node capacitance"
+        },
+        "design_roles": ["sizing", "verification"]
+      }
+    }
+  ]
+}

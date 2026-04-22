@@ -1,0 +1,22 @@
+{
+  "id": "schema-adc-dac-driver-template",
+  "title": "ADC and DAC Driver Template Schema",
+  "schema": "schema_definition",
+  "content_type": "schema_definition",
+  "summary": "Starter schema for ADC and DAC driver templates.",
+  "data": {
+    "record_type": "adc_dac_driver_template",
+    "required_fields": ["id", "title", "schema", "topologies", "summary"],
+    "recommended_fields": ["default_constraints", "future_extension_points", "notes"],
+    "example_stub": {
+      "id": "template-driver-example",
+      "title": "Generic Converter Driver Template",
+      "schema": "adc_dac_driver_template",
+      "topologies": ["adc_input_buffer", "dac_output_buffer"],
+      "summary": "Vendor-neutral converter driver starter.",
+      "data": {
+        "default_constraints": {"target_gm_s": 0.002}
+      }
+    }
+  }
+}

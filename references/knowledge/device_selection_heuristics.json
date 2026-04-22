@@ -1,0 +1,69 @@
+{
+  "schema": "reference_bundle",
+  "content_type": "device_selection_heuristic",
+  "items": [
+    {
+      "id": "heuristic-common-source-baseline",
+      "title": "Single-Stage Voltage Gain Heuristic",
+      "schema": "device_selection_heuristic",
+      "topologies": ["common_source_res_load", "source_degenerated_cs", "common_source_active_load"],
+      "tags": ["gain", "single_stage", "baseline"],
+      "summary": "Prefer common-source style stages for moderate gain targets with simple, inspectable device stacks.",
+      "data": {
+        "heuristic_defaults": {
+          "target_vov_v": 0.2,
+          "lambda_1_per_v": 0.02
+        },
+        "selection_bias": {
+          "moderate_gain": 1.2,
+          "single_stage": 1.1
+        },
+        "notes": [
+          "Use explicit resistive load when interpretability matters.",
+          "Move to active load if resistor area or gain pressure grows."
+        ]
+      }
+    },
+    {
+      "id": "heuristic-opamp-general-purpose",
+      "title": "General-Purpose Op-Amp Heuristic",
+      "schema": "device_selection_heuristic",
+      "topologies": ["two_stage_miller", "folded_cascode_opamp", "ldo_error_amp_core"],
+      "tags": ["opamp", "ugbw", "compensation"],
+      "summary": "Use two-stage Miller for broad compatibility and folded cascode when headroom or low-noise hints dominate.",
+      "data": {
+        "heuristic_defaults": {
+          "phase_margin_deg": 60.0,
+          "target_vov_v": 0.18,
+          "gm_id_target_s_per_a": 10.0
+        },
+        "selection_bias": {
+          "high_gain": 1.3,
+          "tight_headroom": 1.15
+        },
+        "notes": [
+          "Folded cascode is often safer below about 1.2 V supply.",
+          "Miller compensation is the easiest first-pass compensation strategy."
+        ]
+      }
+    },
+    {
+      "id": "heuristic-current-mirror-family",
+      "title": "Current Mirror Family Heuristic",
+      "schema": "device_selection_heuristic",
+      "topologies": ["current_mirror", "cascode_current_mirror", "wide_swing_current_mirror", "wilson_current_mirror", "widlar_current_mirror"],
+      "tags": ["mirror", "bias", "compliance"],
+      "summary": "Escalate from simple mirror to higher-order variants only when output resistance, headroom, copy accuracy, or very low current behavior are explicit needs.",
+      "data": {
+        "heuristic_defaults": {
+          "target_vov_v": 0.18
+        },
+        "selection_bias": {
+          "compliance_sensitive": 1.2,
+          "precision_copy": 1.15,
+          "low_current": 1.1
+        }
+      }
+    }
+  ]
+}
