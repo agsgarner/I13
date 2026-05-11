@@ -48,6 +48,16 @@ class RefinementAgent(BaseAgent):
             memory.write("status", DesignStatus.REFINEMENT_SKIPPED)
             return state, report
 
+        refinement_reference_hits = self.retrieve_references(
+            memory,
+            query=f"{topo} refinement bounded update design equation heuristic",
+            topologies=[topo],
+            content_types=["design_equation", "device_selection_heuristic", "template"],
+            limit=5,
+            trace_label=f"refinement_guidance::{topo}",
+        )
+        memory.write("refinement_reference_summary", {"used": refinement_reference_hits})
+
         if sim.get("simulation_skipped"):
             report = RefinementReport(
                 changed=False,

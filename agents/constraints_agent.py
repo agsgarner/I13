@@ -173,6 +173,14 @@ class ConstraintAgent(BaseAgent):
             return state, report
 
         template = topology_meta["constraint_template"]
+        reference_hits = self.retrieve_references(
+            memory,
+            query=f"{topology_key} constraint sanity design equations operating range",
+            topologies=[eval_topology],
+            content_types=["design_equation", "device_selection_heuristic", "template"],
+            limit=6,
+            trace_label=f"constraint_sanity::{eval_topology}",
+        )
         simulation_plan = (
             (state.get("case_metadata") or {}).get("simulation_plan")
             or topology_meta.get("simulation_plan")
@@ -358,6 +366,7 @@ class ConstraintAgent(BaseAgent):
         )
 
         memory.write("constraints_report", report.__dict__)
+        memory.write("constraint_reference_summary", {"used": reference_hits})
         memory.write("status", DesignStatus.CONSTRAINTS_OK if passed else DesignStatus.CONSTRAINTS_FAILED)
         return state, report
 

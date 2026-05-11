@@ -13,6 +13,11 @@ The framework is designed for capstone-style demos where we want traceability an
 Each agent reads and writes shared memory so the full design state stays inspectable.
 
 New in this version:
+- Added Hugging Face Space netlist generation as the first-choice `NetlistAgent` backend when `USE_HF_NETLIST=1`, with OpenAI and deterministic fallbacks.
+- Added per-run netlist backend metadata: backend used, prompt sent, raw response path, cleaned netlist path, and fallback reason.
+- Added `tools/netlist_to_schematic.py` and automatic schematic artifacts for generated netlists.
+- Added `python3 demo_showcase.py --case ... --sweep ...` for live parameter sweeps with comparison summaries, CSVs, and plots.
+- Added `bash run_showcase_demo.sh` as the polished senior-design showcase command.
 - Added `python3 main.py preflight` for environment readiness checks before demos.
 - Added `python3 main.py showcase` as the final curated TI demo flow with per-case sponsor-review summaries and one aggregate rollup.
 - Added `python3 main.py showcase-backup` as a deterministic backup path that still generates polished artifacts even when simulation is intentionally skipped or unavailable.
@@ -77,6 +82,15 @@ Run the final TI live-demo command:
 python3 main.py showcase
 ```
 
+Generate the canonical Streamlit/static artifact bundle for the sponsor-safe path:
+
+```bash
+python3 demo_showcase.py --all-safe
+streamlit run ui_showcase.py
+```
+
+Both commands use `artifacts/showcase_runs/latest/` as the presentation source for copied netlists, schematics, plots, reports, and `artifact_manifest.json`.
+
 Run the backup demo command:
 
 ```bash
@@ -124,9 +138,34 @@ DEMO_PROFILE=list python3 demo_runner.py
 
 The default backend is deterministic rule-based planning (`LLM_BACKEND=rule_based`), which is robust for demos and does not require cloud/API access.
 
+`NetlistAgent` has its own generation route for SPICE output:
+
+1. Hugging Face Space / Gradio backend when enabled.
+2. OpenAI ChatGPT backend when enabled and configured.
+3. Local deterministic templates/stubs so the demo still produces artifacts.
+
+To use the fine-tuned Hugging Face generator:
+
+```bash
+pip install -r requirements-optional.txt
+export USE_HF_NETLIST=1
+export HF_SPACE_ID=potatoman869/spice_netlist-generator
+# optional for private/rate-limited access
+export HF_TOKEN=...
+python3 main.py run-case --case rc
+```
+
+If `gradio_client` is not installed or the Space call fails, the console prints a clear warning and the flow falls back automatically. Every run writes:
+
+- `generated.sp`
+- `netlist_prompt.txt`
+- `raw_llm_response.txt`
+- `netlist_backend_metadata.json`
+
 To use OpenAI:
 
 ```bash
+export USE_OPENAI=1
 export LLM_BACKEND=openai
 export OPENAI_API_KEY=...
 export OPENAI_MODEL=gpt-5.4-mini
@@ -142,6 +181,53 @@ python3 main.py
 ```
 
 If `LLM_BACKEND=openai` is configured but unavailable (missing package/API key/init failure), the system now degrades automatically to deterministic rule-based planning.
+
+## Live Parameter Sweep Showcase
+
+These commands prove that changing specs changes sizing, netlists, simulation results, plots, metrics, reports, and schematics:
+
+```bash
+python3 demo_showcase.py --case rc_lowpass --sweep target_fc_hz=500,1000,5000
+python3 demo_showcase.py --case common_source --sweep target_gain_db=10,20,30
+python3 demo_showcase.py --case mos_buffer --sweep load_cap_f=1e-12,5e-12,20e-12
+```
+
+Each sweep writes:
+
+- `comparison_summary.md`
+- `comparison_table.csv`
+- `comparison_plot.png`
+- one normal artifact folder per parameter value with `generated.sp`, plots, metrics, schematic, and `final_report.txt`
+
+The single polished command is:
+
+```bash
+bash run_showcase_demo.sh
+```
+
+During the showcase, open the comparison summaries first, then open one `generated.sp`, `schematic.png`, AC/DC/transient plot, and `final_report.txt` from two different sweep points to show visible parameter-dependent changes.
+
+## Schematic Generation
+
+After netlist generation, the flow runs:
+
+```bash
+python3 tools/netlist_to_schematic.py artifacts/.../generated.sp --out artifacts/.../schematic.png
+```
+
+The tool tries `lcapy` for simple R/C/L/V/I circuits. If lcapy, Circuitikz, or MOS rendering is unavailable, it creates a readable block/node schematic with transistor terminal labels. Reports include `schematic_png_path`, `schematic_svg_path`, `schematic_status`, and any failure reason.
+
+## Honest Demo Status
+
+Reports now use explicit public-demo statuses:
+
+- `PASSED`
+- `FAILED`
+- `NOT TESTED`
+- `SIMULATION MISSING`
+- `PARTIAL`
+
+Proxy or behavioral cases are labeled `proxy/demo-only` in the report. A case should only be described as fully proven when requirement rows are simulation-backed and passing.
 
 ## Structured Reference Knowledge
 

@@ -1,3 +1,9 @@
 # Optional ML/tooling dependencies
 torch>=2.0
 PyYAML>=6.0
+gradio_client>=0.10
+streamlit>=1.30
+gradio>=4.0
+lcapy>=1.24
+schemdraw>=0.19
+graphviz>=0.20

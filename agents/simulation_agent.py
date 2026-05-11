@@ -103,6 +103,18 @@ class SimulationAgent(BaseAgent):
         saved_netlist_path = os.path.join(base_dir, "generated.sp")
         with open(saved_netlist_path, "w") as f:
             f.write(netlist)
+        netlist_backend_metadata = self._persist_netlist_backend_metadata(
+            memory=memory,
+            base_dir=base_dir,
+            cleaned_netlist_path=saved_netlist_path,
+        )
+        schematic_metadata = self._generate_schematic_artifacts(
+            saved_netlist_path,
+            base_dir,
+            topology=topology,
+            sizing=sizing,
+            constraints=constraints,
+        )
         analysis_data = {}
 
         if force_skip_simulation or not self.ngspice_path:
@@ -134,6 +146,8 @@ class SimulationAgent(BaseAgent):
                     if force_skip_simulation
                     else "Skipped ngspice execution; metrics unavailable."
                 ),
+                "netlist_backend_metadata": netlist_backend_metadata,
+                **schematic_metadata,
                 "plot_validations": [],
                 "plot_validation_summary": {
                     "passes": 0,
@@ -176,6 +190,8 @@ class SimulationAgent(BaseAgent):
             "analyses": simulation_plan.get("analyses", []),
             "intent": simulation_plan.get("intent"),
             "simulation_provenance": "Executed directly from artifact generated.sp",
+            "netlist_backend_metadata": netlist_backend_metadata,
+            **schematic_metadata,
             "plot_validations": [],
             "netlist_stage_report": memory.read("netlist_stage_report"),
         }
@@ -444,6 +460,7 @@ class SimulationAgent(BaseAgent):
                 sim_i = self._extract_current_from_log(sim.get("log_preview"))
                 if sim_i is not None:
                     sim["iout_a"] = abs(sim_i)
+                self._annotate_current_mirror_metrics(sim, sizing, memory.read("constraints") or {})
 
             if topology_eval == "bandgap_reference_core":
                 vref = self._extract_named_voltage_from_log(sim.get("log_preview"), "v(ref)")
@@ -545,6 +562,10 @@ class SimulationAgent(BaseAgent):
                 current_for_power = supply_i if supply_i is not None else ibias
                 if vdd is not None and current_for_power is not None:
                     sim["power_mw"] = 1000.0 * float(vdd) * float(current_for_power)
+                if topology_eval == "common_drain":
+                    gm = (((sim.get("device_metrics") or {}).get("m1") or {}).get("gm"))
+                    if gm is not None:
+                        sim["gm_s"] = abs(float(gm))
 
             if topology_eval in {
                 "diff_pair",
@@ -778,6 +799,68 @@ class SimulationAgent(BaseAgent):
             if path and os.path.exists(path):
                 return path
         return None
+
+    def _persist_netlist_backend_metadata(self, memory: SharedMemory, base_dir: str, cleaned_netlist_path: str):
+        metadata = dict(memory.read("netlist_backend_metadata") or {})
+        prompt = metadata.get("prompt_sent") or ""
+        raw_response = metadata.get("raw_llm_response")
+        if raw_response is None:
+            raw_response = metadata.get("cleaned_netlist") or ""
+
+        prompt_path = os.path.join(base_dir, "netlist_prompt.txt")
+        raw_path = os.path.join(base_dir, "raw_llm_response.txt")
+        meta_path = os.path.join(base_dir, "netlist_backend_metadata.json")
+        self._safe_write_text(prompt_path, prompt)
+        self._safe_write_text(raw_path, raw_response)
+
+        metadata.update(
+            {
+                "prompt_sent_path": prompt_path,
+                "raw_llm_response_path": raw_path,
+                "cleaned_netlist_path": cleaned_netlist_path,
+            }
+        )
+        compact = dict(metadata)
+        if len(compact.get("prompt_sent") or "") > 1200:
+            compact["prompt_sent"] = compact["prompt_sent"][:1200] + "\n...[truncated]"
+        if len(compact.get("raw_llm_response") or "") > 1200:
+            compact["raw_llm_response"] = compact["raw_llm_response"][:1200] + "\n...[truncated]"
+        if len(compact.get("cleaned_netlist") or "") > 1200:
+            compact["cleaned_netlist"] = compact["cleaned_netlist"][:1200] + "\n...[truncated]"
+        self._safe_write_text(meta_path, self._to_json(compact))
+        metadata["metadata_path"] = meta_path
+        memory.write("netlist_backend_metadata", metadata)
+        return metadata
+
+    def _generate_schematic_artifacts(self, netlist_path: str, base_dir: str, topology: str = None, sizing: dict = None, constraints: dict = None):
+        png_path = os.path.join(base_dir, "schematic.png")
+        try:
+            from tools.netlist_to_schematic import generate_schematic
+
+            result = generate_schematic(
+                netlist_path,
+                png_path,
+                topology=topology,
+                sizing=sizing or {},
+                constraints=constraints or {},
+            )
+            metadata_path = os.path.join(base_dir, "schematic_metadata.json")
+            self._safe_write_text(metadata_path, self._to_json(result))
+            return {
+                "schematic_png_path": result.get("schematic_png_path"),
+                "schematic_svg_path": result.get("schematic_svg_path"),
+                "schematic_status": result.get("schematic_status", "failed"),
+                "schematic_failure_reason": result.get("schematic_failure_reason"),
+                "schematic_metadata_path": metadata_path,
+            }
+        except Exception as exc:
+            return {
+                "schematic_png_path": None,
+                "schematic_svg_path": None,
+                "schematic_status": "failed",
+                "schematic_failure_reason": str(exc),
+                "schematic_metadata_path": None,
+            }
 
     def _analysis_topology(self, topology: str):
         canonical = canonical_topology_key(topology)
@@ -1576,6 +1659,23 @@ class SimulationAgent(BaseAgent):
                 continue
             metrics.setdefault(device, {})[metric] = value
         return metrics
+
+    def _annotate_current_mirror_metrics(self, sim, sizing, constraints):
+        reference_current = sizing.get("I_ref")
+        output_current = sim.get("iout_a") or sizing.get("I_out_target") or constraints.get("target_iout_a")
+        requested_ratio = sizing.get("mirror_ratio") or constraints.get("mirror_ratio")
+        if reference_current is not None:
+            sim["reference_current_a"] = abs(float(reference_current))
+        if output_current is not None:
+            sim["output_current_a"] = abs(float(output_current))
+            sim.setdefault("iout_a", abs(float(output_current)))
+        if requested_ratio is not None:
+            sim["mirror_ratio_requested"] = float(requested_ratio)
+        if sim.get("reference_current_a") not in (None, 0) and sim.get("output_current_a") is not None:
+            measured_ratio = abs(float(sim["output_current_a"])) / max(abs(float(sim["reference_current_a"])), 1e-30)
+            sim["mirror_ratio_measured"] = measured_ratio
+            if sim.get("mirror_ratio_requested") not in (None, 0):
+                sim["ratio_error_percent"] = 100.0 * abs(measured_ratio - float(sim["mirror_ratio_requested"])) / max(abs(float(sim["mirror_ratio_requested"])), 1e-30)
 
     def _extract_op_region_summary(self, log_preview):
         if not log_preview:

@@ -4,8 +4,8 @@ from pathlib import Path
 from core.demo_safe import summarize_sizing
 
 
-FINAL_SHOWCASE_PRIMARY_COMMAND = "python3 main.py showcase"
-FINAL_SHOWCASE_BACKUP_COMMAND = "python3 main.py showcase-backup"
+FINAL_SHOWCASE_PRIMARY_COMMAND = "venv/bin/python3 main.py showcase"
+FINAL_SHOWCASE_BACKUP_COMMAND = "venv/bin/python3 main.py showcase-backup"
 
 
 FINAL_SHOWCASE_CASES = [

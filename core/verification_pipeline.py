@@ -78,6 +78,17 @@ def collect_analysis_metrics(
         op_metrics["power_mw"] = sim.get("power_mw")
     if sim.get("op_summary"):
         op_metrics["op_summary"] = sim.get("op_summary")
+    if sim.get("device_metrics"):
+        devices = {}
+        for device, values in (sim.get("device_metrics") or {}).items():
+            normalized = dict(values or {})
+            if normalized.get("gm") is not None and normalized.get("gm_s") is None:
+                normalized["gm_s"] = normalized.get("gm")
+            if normalized.get("id") is not None and normalized.get("id_a") is None:
+                normalized["id_a"] = normalized.get("id")
+            devices[device] = normalized
+        if devices:
+            op_metrics["devices"] = devices
     op_executed = bool(op_metrics) or bool(op_point_results) or bool(sim.get("log_path"))
     per_analysis["op"] = {
         "planned": "op" in planned_analyses,
@@ -105,6 +116,15 @@ def collect_analysis_metrics(
         dc_metrics.update(extract_line_regulation_metrics(analysis_data.get("dc_data")))
     if sim.get("iout_a") is not None:
         dc_metrics.setdefault("iout_a", sim.get("iout_a"))
+    for key in (
+        "reference_current_a",
+        "output_current_a",
+        "mirror_ratio_requested",
+        "mirror_ratio_measured",
+        "ratio_error_percent",
+    ):
+        if sim.get(key) is not None:
+            dc_metrics.setdefault(key, sim.get(key))
     if sim.get("vref_v") is not None:
         dc_metrics.setdefault("vref_v", sim.get("vref_v"))
     dc_executed = bool((analysis_data.get("dc_data") or {}).get("x"))
@@ -201,10 +221,16 @@ def collect_analysis_metrics(
         "ugbw_hz",
         "phase_margin_deg",
         "power_mw",
+        "gm_s",
         "fc_hz",
         "center_hz",
         "q_factor",
         "iout_a",
+        "reference_current_a",
+        "output_current_a",
+        "mirror_ratio_requested",
+        "mirror_ratio_measured",
+        "ratio_error_percent",
         "vref_v",
         "line_regulation_mv_per_v",
         "compliance_voltage_v",
@@ -338,6 +364,9 @@ def write_artifact_bundle(base_dir, sim, analysis_metrics, verification_summary,
         ("tran_outn_csv", "data"),
         ("tran_diff_csv", "data"),
         ("tran_qb_csv", "data"),
+        ("schematic_png_path", "plots"),
+        ("schematic_svg_path", "plots"),
+        ("schematic_metadata_path", "reports"),
     ):
         copied = _copy_if_present(sim.get(key), directories[bucket])
         if copied:
@@ -750,6 +779,8 @@ def _build_requirement_evaluations(topology, constraints, analysis_metrics, spec
         if not name or name in seen or name.startswith("reference::"):
             continue
         if name not in REQUIREMENT_NAMES:
+            continue
+        if check.get("target") is None and check.get("status", "unknown") == "unknown":
             continue
         assessment = _assessment_from_check(check)
         evaluations.append(

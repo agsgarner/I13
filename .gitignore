@@ -28,6 +28,7 @@ checkpoints/
 *.safetensors
 
 pycache/
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -45,3 +46,4 @@ venv/
 
 .env
 *.env
+*.zip

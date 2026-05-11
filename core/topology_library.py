@@ -212,7 +212,7 @@ TOPOLOGY_LIBRARY = {
             "analyses": ["op", "ac", "tran"],
             "intent": "Check source-follower biasing, bandwidth, and large-signal following behavior.",
             "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
-            "required_constraint_targets": ["supply_v", "target_gm_s"],
+            "required_constraint_targets": ["supply_v", "target_vout_q_v", "target_gain_db", "power_limit_mw"],
         },
     },
     "adc_input_buffer": {
@@ -260,7 +260,7 @@ TOPOLOGY_LIBRARY = {
             "analyses": ["op", "ac", "tran"],
             "intent": "Check bias headroom, then verify AC response and transient signal handling.",
             "primary_metrics": ["gain_db", "bandwidth_hz", "power_mw"],
-            "required_constraint_targets": ["supply_v", "target_gm_s"],
+            "required_constraint_targets": ["target_gain_db", "target_bw_hz", "power_limit_mw"],
         },
     },
     "source_degenerated_cs": {

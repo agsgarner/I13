@@ -27,6 +27,8 @@ from core.final_showcase import (
 from core.preflight_checks import format_preflight_report, run_preflight_checks
 from core.reference_knowledge import load_reference_catalog, resolve_reference_paths
 from core.runtime_backend import resolve_llm_backend
+from core.reference_usage import summarize_reference_usage
+from core.showcase_artifacts import organize_showcase_latest, row_from_final_state
 from core.shared_memory import SharedMemory
 
 from agents.topology_agent import TopologyAgent
@@ -56,11 +58,18 @@ def _banner_for_state(final_state: dict) -> str:
     status = final_state.get("status")
     constraints_report = final_state.get("constraints_report") or {}
     sim = final_state.get("simulation_results") or {}
+    verification = sim.get("verification_summary") or final_state.get("verification_summary") or {}
 
-    if status == DesignStatus.DESIGN_VALIDATED:
+    if sim.get("simulation_skipped"):
+        return "[SIMULATION MISSING]"
+    if status == DesignStatus.DESIGN_VALIDATED or verification.get("final_status") == "pass":
         if constraints_report.get("warnings") or sim.get("parser_warning"):
-            return "[VALIDATED WITH WARNINGS]"
-        return "[VALIDATED]"
+            return "[PASSED WITH WARNINGS]"
+        return "[PASSED]"
+    if verification.get("final_status") == "partial":
+        return "[PARTIAL]"
+    if verification.get("overall_verdict") == "not_tested":
+        return "[NOT TESTED]"
     if status in {
         DesignStatus.ORCHESTRATION_FAILED,
         DesignStatus.DESIGN_INVALID,
@@ -89,7 +98,13 @@ def _format_metrics_block(sim: dict):
         ("Rolloff", "rolloff_db_per_dec", " dB/dec"),
         ("Power", "power_mw", " mW"),
         ("Pmargin", "power_margin_mw", " mW"),
+        ("GM", "gm_s", " S"),
         ("Iout", "iout_a", " A"),
+        ("Iref", "reference_current_a", " A"),
+        ("Iout", "output_current_a", " A"),
+        ("MirReq", "mirror_ratio_requested", ""),
+        ("MirMeas", "mirror_ratio_measured", ""),
+        ("RatioErr", "ratio_error_percent", " %"),
         ("Vref", "vref_v", " V"),
         ("Fosc", "oscillation_hz", " Hz"),
         ("Delay", "decision_delay_s", " s"),
@@ -180,11 +195,17 @@ def _format_requirement_block(verification: dict):
         lines.append("  - No explicit requirement evaluations were generated.")
         return lines
     for item in evaluations:
+        status_label = {
+            "pass": "PASSED",
+            "fail": "FAILED",
+            "unknown": "NOT TESTED",
+        }.get(item.get("status"), "PARTIAL")
         lines.append(
             "  - "
             f"{item.get('requirement')}: requested={_fmt_value(item.get('requested'))}, "
             f"measured={_fmt_value(item.get('measured'))}, "
-            f"status={item.get('status')}, assessment={item.get('assessment')}"
+            f"status={item.get('status')}, demo_status={status_label}, "
+            f"assessment={item.get('assessment')}"
         )
     return lines
 
@@ -222,11 +243,77 @@ def _format_artifact_block(sim: dict):
             "tran_out_csv",
             "tran_outn_csv",
             "tran_diff_csv",
+            "schematic_png_path",
+            "schematic_svg_path",
+            "schematic_metadata_path",
         ):
             if sim.get(key):
                 lines.append(f"  - {key}: {sim.get(key)}")
     if len(lines) == 1:
         lines.append("  - n/a")
+    return lines
+
+
+def _summarize_llm_usage(final_state: dict) -> list[str]:
+    uses = []
+    for item in final_state.get("history") or []:
+        if item.get("event") != "llm_call":
+            continue
+        data = item.get("data") or {}
+        agent = data.get("agent") or "LLM"
+        task = data.get("task") or "assist"
+        backend = data.get("backend_used")
+        if backend:
+            uses.append(f"{agent}:{task} via {backend}")
+        else:
+            uses.append(f"{agent}:{task}")
+    return uses
+
+
+def _format_backend_provenance_block(final_state: dict):
+    sim = final_state.get("simulation_results") or {}
+    backend = sim.get("netlist_backend_metadata") or final_state.get("netlist_backend_metadata") or {}
+    llm_resolution = final_state.get("llm_resolution") or {}
+    usage = summarize_reference_usage(final_state)
+    llm_usage = _summarize_llm_usage(final_state)
+    simulator_status = "skipped" if sim.get("simulation_skipped") else ("complete" if sim.get("returncode") == 0 else "not complete")
+    lines = [
+        "Backend Provenance:",
+        f"  - backend_used: {backend.get('backend_used') or 'n/a'}",
+        f"  - llm_backend_configured: {llm_resolution.get('configured_backend', 'n/a')}",
+        f"  - llm_backend_resolved: {llm_resolution.get('resolved_backend', 'n/a')}",
+        "  - llm_used_for: " + (", ".join(llm_usage) if llm_usage else "none; deterministic fallback"),
+        "  - deterministic_equations_used: " + (", ".join(usage["equations_used"]) or "n/a"),
+        "  - templates_used: " + (", ".join(usage["templates_used"]) or "n/a"),
+        f"  - simulator_used: {sim.get('ngspice_path') or 'ngspice unavailable'}",
+        f"  - simulator_status: {simulator_status}",
+        f"  - artifact_root: {sim.get('artifact_dir') or 'n/a'}",
+    ]
+    if backend.get("fallback_reason"):
+        lines.append(f"  - fallback_reason: {backend.get('fallback_reason')}")
+    return lines
+
+
+def _format_agent_pipeline_block(final_state: dict):
+    sim = final_state.get("simulation_results") or {}
+    verification = sim.get("verification_summary") or final_state.get("verification_summary") or {}
+    backend = sim.get("netlist_backend_metadata") or final_state.get("netlist_backend_metadata") or {}
+    refinement = final_state.get("refinement_report") or {}
+    sizing = summarize_sizing(final_state.get("sizing") or {})
+    metrics = verification.get("extracted_metrics") or {}
+    lines = [
+        "Agent Pipeline Summary:",
+        f"  1. Specification parsing: normalized {len(final_state.get('constraints') or {})} constraints from the request.",
+        f"  2. Topology selection: selected {final_state.get('selected_topology') or 'n/a'}; confidence={_fmt_value(final_state.get('topology_confidence'))}.",
+        "     reasoning: " + (final_state.get("topology_reasoning") or "n/a"),
+        "  3. Sizing: " + ("; ".join(sizing[:4]) if sizing else "n/a"),
+        f"  4. Netlist generation: source={final_state.get('netlist_source', 'n/a')}; backend={backend.get('backend_used') or 'n/a'}.",
+        f"  5. Simulation: analyses={', '.join(sim.get('analyses') or []) or 'n/a'}; skipped={bool(sim.get('simulation_skipped'))}; returncode={sim.get('returncode')}.",
+        "  6. Metrics extraction: " + (", ".join(sorted(metrics.keys())[:10]) if metrics else "n/a"),
+        f"  7. Verification: verdict={verification.get('overall_verdict', 'unknown')}; status={verification.get('final_status', 'unknown')}; pass/fail/unknown={verification.get('spec_passes', 0)}/{verification.get('spec_fails', 0)}/{verification.get('spec_unknown', 0)}.",
+        "  8. Refinement suggestion: " + ("; ".join(refinement.get("notes") or []) if refinement.get("notes") else "n/a"),
+        f"  9. Report/artifact generation: {sim.get('artifact_dir') or 'n/a'}",
+    ]
     return lines
 
 
@@ -257,6 +344,35 @@ def format_final_report(case_name: str, final_state: dict) -> str:
         f"Iterations completed: {final_state.get('iteration', 0)}",
         f"Netlist source: {final_state.get('netlist_source', 'n/a')}",
     ]
+    demo_model = case_meta.get("demo_model", "native")
+    if any(token in str(demo_model).lower() for token in ("proxy", "behavioral")):
+        lines.append(f"Model fidelity: proxy/demo-only ({demo_model}); do not treat as silicon validation.")
+    else:
+        lines.append(f"Model fidelity: {demo_model}")
+    netlist_backend = sim.get("netlist_backend_metadata") or final_state.get("netlist_backend_metadata") or {}
+    if netlist_backend:
+        prompt_preview = (netlist_backend.get("prompt_sent") or "").strip().replace("\n", " ")
+        if len(prompt_preview) > 300:
+            prompt_preview = prompt_preview[:300] + "..."
+        lines.extend(
+            [
+                "Netlist LLM Backend:",
+                f"  - backend_used: {netlist_backend.get('backend_used', 'n/a')}",
+                f"  - prompt_sent: {prompt_preview or 'n/a'}",
+                f"  - raw_llm_response_path: {netlist_backend.get('raw_llm_response_path', 'n/a')}",
+                f"  - cleaned_netlist_path: {netlist_backend.get('cleaned_netlist_path', sim.get('saved_netlist_path', 'n/a'))}",
+                f"  - fallback_reason: {netlist_backend.get('fallback_reason') or 'n/a'}",
+            ]
+        )
+    lines.extend(
+        [
+            "Schematic Artifact:",
+            f"  - schematic_png_path: {sim.get('schematic_png_path', 'n/a')}",
+            f"  - schematic_svg_path: {sim.get('schematic_svg_path', 'n/a')}",
+            f"  - schematic_status: {sim.get('schematic_status', 'n/a')}",
+            f"  - schematic_failure_reason: {sim.get('schematic_failure_reason') or 'n/a'}",
+        ]
+    )
     llm_resolution = final_state.get("llm_resolution") or {}
     if llm_resolution:
         lines.append(
@@ -265,6 +381,7 @@ def format_final_report(case_name: str, final_state: dict) -> str:
             f"resolved={llm_resolution.get('resolved_backend')} "
             f"fallback={llm_resolution.get('fallback_used')}"
         )
+    lines.extend(_format_backend_provenance_block(final_state))
     reference_catalog = final_state.get("reference_catalog_summary") or {}
     if reference_catalog:
         lines.append(
@@ -272,6 +389,16 @@ def format_final_report(case_name: str, final_state: dict) -> str:
             f"{reference_catalog.get('entry_count', 0)} entries from "
             f"{', '.join(reference_catalog.get('roots') or [])}"
         )
+    reference_usage = summarize_reference_usage(final_state)
+    lines.extend(
+        [
+            "Reference Usage:",
+            "  - reference_ids_used: " + (", ".join(reference_usage["reference_ids_used"]) or "n/a"),
+            "  - equations_used: " + (", ".join(reference_usage["equations_used"]) or "n/a"),
+            "  - templates_used: " + (", ".join(reference_usage["templates_used"]) or "n/a"),
+            "  - heuristics_used: " + (", ".join(reference_usage["heuristics_used"]) or "n/a"),
+        ]
+    )
     for label, key in (
         ("Topology references", "topology_reference_summary"),
         ("Sizing references", "sizing_reference_summary"),
@@ -295,6 +422,7 @@ def format_final_report(case_name: str, final_state: dict) -> str:
         )
 
     lines.extend(_format_key_value_block("Requested Constraints:", constraints))
+    lines.extend(_format_agent_pipeline_block(final_state))
     lines.extend(_format_list_block("Sizing Summary:", summarize_sizing(sizing)))
     lines.extend(_format_analysis_block(verification))
     lines.extend(_format_key_value_block("Extracted Metrics:", extracted_metrics))
@@ -368,6 +496,9 @@ def _artifact_summary(case_name: str, final_state: dict) -> dict:
         "status": final_state.get("status"),
         "overall_verdict": verification.get("overall_verdict"),
         "llm_resolution": final_state.get("llm_resolution"),
+        "netlist_backend_metadata": sim.get("netlist_backend_metadata") or final_state.get("netlist_backend_metadata"),
+        "reference_usage": summarize_reference_usage(final_state),
+        "model_fidelity": case_meta.get("demo_model", "native"),
         "simulation_intent": (case_meta.get("simulation_plan") or {}).get("intent"),
         "analyses": sim.get("analyses") or (case_meta.get("simulation_plan") or {}).get("analyses", []),
         "requested_constraints": constraints,
@@ -413,11 +544,22 @@ def _artifact_summary(case_name: str, final_state: dict) -> dict:
             "tran_plot": sim.get("tran_plot"),
             "dc_plot": sim.get("dc_plot"),
             "log_path": sim.get("log_path"),
+            "schematic_png_path": sim.get("schematic_png_path"),
+            "schematic_svg_path": sim.get("schematic_svg_path"),
+            "schematic_status": sim.get("schematic_status"),
         },
         "plot_validations": sim.get("plot_validations"),
         "verification_summary": sim.get("verification_summary"),
         "requirement_evaluations": verification.get("requirement_evaluations"),
         "artifact_manifest": sim.get("artifact_manifest"),
+        "backend_provenance": {
+            "backend_used": (sim.get("netlist_backend_metadata") or final_state.get("netlist_backend_metadata") or {}).get("backend_used"),
+            "llm_used_for": _summarize_llm_usage(final_state),
+            "deterministic_equations_used": summarize_reference_usage(final_state)["equations_used"],
+            "templates_used": summarize_reference_usage(final_state)["templates_used"],
+            "simulator_used": sim.get("ngspice_path") or "ngspice unavailable",
+            "simulator_status": "skipped" if sim.get("simulation_skipped") else ("complete" if sim.get("returncode") == 0 else "not complete"),
+        },
         "llm_calls": [
             item.get("data")
             for item in (final_state.get("history") or [])
@@ -801,6 +943,7 @@ def run_final_showcase(cases=None, *, backup: bool = False) -> dict:
     print(f"Aggregate output dir: {out_dir}")
 
     case_summaries = []
+    case_rows = []
     for index, case_name in enumerate(selected_cases, start=1):
         case_info = FINAL_SHOWCASE_CASE_DETAILS.get(case_name, {})
         print("")
@@ -820,6 +963,7 @@ def run_final_showcase(cases=None, *, backup: bool = False) -> dict:
             }
 
         final_state = run_case(case_name, runtime_options=runtime_options)
+        case_rows.append(row_from_final_state(case_name, final_state))
         summary = build_showcase_case_summary(case_name, final_state, mode=mode)
         markdown = render_showcase_case_markdown(summary)
 
@@ -854,6 +998,17 @@ def run_final_showcase(cases=None, *, backup: bool = False) -> dict:
     _write_text_file(rollup_markdown_path, rollup_markdown)
     _write_json_file(rollup_json_path, rollup_payload)
     _publish_latest_showcase_files(backup, rollup_markdown, rollup_payload, case_summaries)
+    organize_showcase_latest(
+        command=FINAL_SHOWCASE_BACKUP_COMMAND if backup else FINAL_SHOWCASE_PRIMARY_COMMAND,
+        case_rows=case_rows,
+        sweep_groups=[],
+        architecture_summary=(
+            "Final-showcase terminal runs publish into the same canonical latest artifact bundle used by the Streamlit UI. "
+            "Agents share a design state across specification parsing, topology selection, sizing, constraints, netlist generation, "
+            "operating-point checks, ngspice simulation, metrics extraction, verification, refinement guidance, and report generation."
+        ),
+        clean=True,
+    )
 
     print("")
     print("=== TI Final Showcase Rollup ===")
@@ -1012,15 +1167,21 @@ def run_case(case_name: str, case_override: dict = None, llm_override=None, runt
     case = get_demo_case(case_name)
     runtime_options = dict(runtime_options or {})
     if case_override:
+        base_constraints = dict(case.get("constraints") or {})
+        base_simulation_plan = dict(case.get("simulation_plan") or {})
         case = {**case, **case_override}
         if "constraints" in case_override and isinstance(case_override["constraints"], dict):
-            merged_constraints = dict(case.get("constraints") or {})
+            merged_constraints = dict(base_constraints)
             merged_constraints.update(case_override["constraints"])
             case["constraints"] = merged_constraints
+        else:
+            case["constraints"] = base_constraints
         if "simulation_plan" in case_override and isinstance(case_override["simulation_plan"], dict):
-            merged_plan = dict(case.get("simulation_plan") or {})
+            merged_plan = dict(base_simulation_plan)
             merged_plan.update(case_override["simulation_plan"])
             case["simulation_plan"] = merged_plan
+        elif base_simulation_plan:
+            case["simulation_plan"] = base_simulation_plan
 
     memory = SharedMemory()
     memory.write("specification", case["specification"])

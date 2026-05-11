@@ -82,6 +82,16 @@ class OpPointAgent(BaseAgent):
             memory.write("status", DesignStatus.OP_SIZING_COMPLETE)
             return None
 
+        op_reference_hits = self.retrieve_references(
+            memory,
+            query=f"{topology} operating point gm id overdrive sanity",
+            topologies=[topology],
+            content_types=["design_equation", "device_selection_heuristic"],
+            limit=5,
+            trace_label=f"op_point_sanity::{topology}",
+        )
+        memory.write("op_point_reference_summary", {"used": op_reference_hits})
+
         if not netlist:
             memory.write("status", DesignStatus.OP_SIZING_FAILED)
             memory.write("op_point_error", "Missing netlist for OP sizing pass.")

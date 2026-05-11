@@ -7,6 +7,7 @@ from agents.base_agent import BaseAgent
 from agents.design_status import DesignStatus
 from core.shared_memory import SharedMemory
 from core.topology_aliases import canonical_topology_key
+from llm.netlist_backends import cleanup_spice_netlist, generate_netlist_with_backends
 
 
 class NetlistAgent(BaseAgent):
@@ -76,14 +77,48 @@ class NetlistAgent(BaseAgent):
             memory.write("netlist_error", "Missing topology or sizing")
             return None
 
+        backend_metadata = {}
         if topology == "composite_pipeline":
-            netlist, source = self._build_composite_pipeline_netlist(memory, sizing, constraints)
+            fallback_netlist = self._build_deterministic_composite_for_memory(memory, sizing, constraints)
+            routed = self._route_netlist_backend(
+                topology=topology,
+                sizing=sizing,
+                constraints=constraints,
+                memory=memory,
+                deterministic_netlist=fallback_netlist,
+            )
+            netlist = routed.get("netlist")
+            source = routed.get("source") or "composite_fallback"
+            backend_metadata = routed.get("metadata") or {}
+            if source == "local_deterministic":
+                source = "composite_fallback"
         elif topology in self.TEMPLATE_TOPOLOGIES:
-            netlist = self._build_template_netlist(topology, sizing, constraints, case_meta)
-            source = "template"
+            fallback_netlist = self._build_template_netlist(topology, sizing, constraints, case_meta)
+            routed = self._route_netlist_backend(
+                topology=topology,
+                sizing=sizing,
+                constraints=constraints,
+                memory=memory,
+                deterministic_netlist=fallback_netlist,
+            )
+            netlist = routed.get("netlist")
+            source = "template" if routed.get("source") == "local_deterministic" else routed.get("source")
+            backend_metadata = routed.get("metadata") or {}
         else:
             netlist = self._build_llm_netlist(topology, sizing, constraints, memory=memory)
+            if netlist:
+                netlist = cleanup_spice_netlist(
+                    netlist,
+                    required_analyses=self._planned_analyses(memory),
+                )
             source = "llm"
+            backend_metadata = {
+                "backend_used": "legacy_llm" if netlist else "none",
+                "prompt_sent": "",
+                "raw_llm_response": netlist or "",
+                "cleaned_netlist": netlist or "",
+                "fallback_reason": "no deterministic template available",
+            }
 
         if not netlist or ".end" not in netlist.lower():
             memory.write("status", DesignStatus.NETLIST_FAILED)
@@ -114,8 +149,97 @@ class NetlistAgent(BaseAgent):
         memory.write("netlist_reference_summary", reference_summary)
         memory.write("netlist", netlist)
         memory.write("netlist_source", source)
+        memory.write("netlist_backend_metadata", backend_metadata)
         memory.write("status", DesignStatus.NETLIST_GENERATED)
         return netlist
+
+    def _planned_analyses(self, memory: SharedMemory):
+        return ((memory.read("case_metadata") or {}).get("simulation_plan") or {}).get("analyses") or []
+
+    def _route_netlist_backend(
+        self,
+        *,
+        topology,
+        sizing,
+        constraints,
+        memory: SharedMemory,
+        deterministic_netlist,
+    ):
+        analyses = self._planned_analyses(memory)
+        prompt = self._build_netlist_prompt(topology, sizing, constraints, analyses)
+
+        def deterministic_builder():
+            return deterministic_netlist
+
+        def validate(candidate: str):
+            if not candidate or ".end" not in candidate.lower():
+                return "missing .end"
+            return self._validate_netlist_against_plan(memory, candidate)
+
+        result = generate_netlist_with_backends(
+            prompt=prompt,
+            analyses=analyses,
+            deterministic_builder=deterministic_builder,
+            llm=self.llm,
+            validate=validate,
+        )
+        memory.append_history(
+            "llm_call",
+            {
+                "agent": "NetlistAgent",
+                "task": "netlist_backend_route",
+                "backend_used": result.backend_used,
+                "fallback_reason": result.fallback_reason,
+                "ok": bool(result.cleaned_netlist),
+            },
+        )
+        metadata = {
+            "backend_used": result.backend_used,
+            "prompt_sent": result.prompt_sent,
+            "raw_llm_response": result.raw_response,
+            "cleaned_netlist": result.cleaned_netlist,
+            "fallback_reason": result.fallback_reason,
+            "warnings": result.warnings,
+        }
+        return {
+            "netlist": result.cleaned_netlist,
+            "source": result.backend_used,
+            "metadata": metadata,
+        }
+
+    def _build_netlist_prompt(self, topology, sizing, constraints, analyses):
+        return f"""
+You are generating a valid ngspice netlist for an analog/mixed-signal EDA design flow.
+
+Topology:
+{topology}
+
+Sizing:
+{sizing}
+
+Constraints:
+{constraints}
+
+Planned analyses:
+{analyses}
+
+Return ONLY a valid SPICE/ngspice netlist. Do not include Markdown, explanations,
+or prose outside the netlist.
+
+Hard requirements:
+- include all required independent sources for the topology
+- include device models or includes needed by any MOS/BJT devices
+- preserve useful .model, .include, .param, .control, .op, .ac, .tran, .dc directives
+- include wrdata statements named ac_out.csv, dc_out.csv, tran_in.csv, and/or
+  tran_out.csv when those analyses are present
+- include exactly one .end
+"""
+
+    def _build_deterministic_composite_for_memory(self, memory: SharedMemory, sizing: dict, constraints: dict):
+        plan = memory.read("topology_plan") or {}
+        stages = sizing.get("stages") or plan.get("stages") or []
+        analyses = self._planned_analyses(memory) or ["op", "ac", "tran"]
+        return self._build_deterministic_composite_netlist(stages, sizing, constraints, analyses)
 
     def _collect_netlist_references(self, memory: SharedMemory, topology: str, constraints: dict):
         query = f"{topology} netlist skeleton {constraints}"

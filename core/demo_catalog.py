@@ -3,6 +3,70 @@ import re
 from core.simulation_plan import build_simulation_plan
 from core.topology_library import TOPOLOGY_LIBRARY
 
+READINESS_STABLE_DEMO = "stable_demo"
+READINESS_STABLE_NO_SWEEP = "stable_no_sweep"
+READINESS_EXPERIMENTAL = "experimental"
+READINESS_DISABLED = "disabled"
+
+READINESS_ORDER = (
+    READINESS_STABLE_DEMO,
+    READINESS_STABLE_NO_SWEEP,
+    READINESS_EXPERIMENTAL,
+    READINESS_DISABLED,
+)
+
+READINESS_LABELS = {
+    READINESS_STABLE_DEMO: "Verified Sweep",
+    READINESS_STABLE_NO_SWEEP: "Single-Run Verified",
+    READINESS_EXPERIMENTAL: "Experimental",
+    READINESS_DISABLED: "Disabled",
+}
+
+# Backward compatibility for older metadata values in DEMO_CASES.
+READINESS_ALIASES = {
+    "stable": READINESS_STABLE_NO_SWEEP,
+    "safe": READINESS_STABLE_NO_SWEEP,
+    "verified": READINESS_STABLE_NO_SWEEP,
+    "stable_demo": READINESS_STABLE_DEMO,
+    "stable_no_sweep": READINESS_STABLE_NO_SWEEP,
+    "experimental": READINESS_EXPERIMENTAL,
+    "disabled": READINESS_DISABLED,
+}
+
+# Cases promoted to website-safe sweep status after verified artifact sweeps.
+STABLE_DEMO_SWEEP_CASES = {
+    "rc",
+    "rlc_bandpass",
+    "mirror",
+    "common_source",
+    "folded_cascode_opamp",
+    "comparator",
+    "bandgap_reference",
+    "mos_buffer",
+    "common_drain",
+    "common_gate",
+    "cascode_amp",
+    "source_degenerated_amplifier",
+    "common_source_active_load",
+}
+
+# Conservative sponsor-safe default list (stable_demo only).
+SPONSOR_DEMO_CASES = [
+    "rc",
+    "rlc_bandpass",
+    "mirror",
+    "common_source",
+    "folded_cascode_opamp",
+    "comparator",
+    "bandgap_reference",
+    "mos_buffer",
+    "common_drain",
+    "common_gate",
+    "cascode_amp",
+    "source_degenerated_amplifier",
+    "common_source_active_load",
+]
+
 
 def slugify_label(value: str) -> str:
     text = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower())
@@ -322,9 +386,11 @@ DEMO_CASES = {
         "demo_model": "native",
         "constraints": {
             "supply_v": 1.8,
-            "target_gm_s": 2e-3,
             "target_vov_v": 0.18,
             "target_vout_q_v": 0.7,
+            "target_gain_db": -2.0,
+            "power_limit_mw": 0.8,
+            "target_output_swing_v": 0.03,
             "vin_ac": 1e-3,
             "vin_step": 0.05,
             "load_cap_f": 1e-12,
@@ -339,8 +405,10 @@ DEMO_CASES = {
         "demo_model": "native",
         "constraints": {
             "supply_v": 1.8,
-            "target_gm_s": 1.5e-3,
             "target_vov_v": 0.2,
+            "target_gain_db": 10.0,
+            "target_bw_hz": 5e6,
+            "power_limit_mw": 0.5,
             "vin_dc": 0.2,
             "vin_ac": 1e-3,
             "vin_step": 0.02,
@@ -374,13 +442,13 @@ DEMO_CASES = {
         "demo_model": "native",
         "constraints": {
             "supply_v": 1.8,
-            "target_gain_db": 10.0,
+            "target_gain_db": 8.0,
             "target_bw_hz": 3e6,
             "power_limit_mw": 2.0,
-            "vin_dc": 0.75,
+            "vin_dc": 0.7,
             "vin_ac": 1e-3,
             "load_cap_f": 1e-12,
-            "target_vov_v": 0.18,
+            "target_vov_v": 0.12,
         },
     },
     "cascode_amp": {
@@ -443,10 +511,12 @@ DEMO_CASES = {
         "forced_topology": "common_drain",
         "demo_model": "native",
         "constraints": {
-            "target_gm_s": 2.5e-3,
             "target_vov_v": 0.18,
             "supply_v": 1.8,
             "target_vout_q_v": 0.75,
+            "target_gain_db": -2.0,
+            "power_limit_mw": 0.8,
+            "target_output_swing_v": 0.03,
             "vin_ac": 1e-3,
             "vin_step": 0.05,
             "load_cap_f": 2e-12,
@@ -1115,12 +1185,33 @@ def resolve_case_name(case_name: str) -> str:
     return CASE_ALIASES.get(key, key)
 
 
+def normalize_readiness(readiness: str) -> str:
+    key = str(readiness or READINESS_STABLE_NO_SWEEP).strip().lower()
+    normalized = READINESS_ALIASES.get(key, key)
+    if normalized not in READINESS_ORDER:
+        return READINESS_EXPERIMENTAL
+    return normalized
+
+
+def effective_case_readiness(case_key: str, raw_readiness: str) -> str:
+    normalized = normalize_readiness(raw_readiness)
+    if case_key in STABLE_DEMO_SWEEP_CASES:
+        return READINESS_STABLE_DEMO
+    return normalized
+
+
+def readiness_label(readiness: str) -> str:
+    return READINESS_LABELS.get(normalize_readiness(readiness), "Experimental")
+
+
 def get_demo_case(case_name: str):
     resolved = resolve_case_name(case_name)
     if resolved not in DEMO_CASES:
         available = ", ".join(sorted(DEMO_CASES))
         raise KeyError(f"Unknown DESIGN_CASE '{case_name}'. Available cases: {available}")
     case = dict(DEMO_CASES[resolved])
+    case["readiness"] = effective_case_readiness(resolved, case.get("readiness", READINESS_STABLE_NO_SWEEP))
+    case["readiness_label"] = readiness_label(case["readiness"])
     case["case_key"] = resolved
     case["artifact_label"] = describe_case_for_artifacts(case)
     case["simulation_plan"] = build_case_simulation_plan(case)
@@ -1134,7 +1225,8 @@ def list_demo_cases():
             "display_name": value.get("display_name", key),
             "forced_topology": value.get("forced_topology"),
             "demo_model": value.get("demo_model", "native"),
-            "readiness": value.get("readiness", "stable"),
+            "readiness": effective_case_readiness(key, value.get("readiness", READINESS_STABLE_NO_SWEEP)),
+            "readiness_label": readiness_label(effective_case_readiness(key, value.get("readiness", READINESS_STABLE_NO_SWEEP))),
             "ti_priority": value.get("ti_priority", "medium"),
             "artifact_label": describe_case_for_artifacts({"key": key, **value}),
             "simulation_plan": build_case_simulation_plan({"forced_topology": value.get("forced_topology"), **value}),
@@ -1156,4 +1248,32 @@ def list_demo_profiles():
 
 
 def stable_demo_cases():
-    return [key for key, value in DEMO_CASES.items() if value.get("readiness", "stable") == "stable"]
+    return [
+        key
+        for key, value in DEMO_CASES.items()
+        if effective_case_readiness(key, value.get("readiness", READINESS_STABLE_NO_SWEEP)) == READINESS_STABLE_DEMO
+    ]
+
+
+def stable_no_sweep_cases():
+    return [
+        key
+        for key, value in DEMO_CASES.items()
+        if effective_case_readiness(key, value.get("readiness", READINESS_STABLE_NO_SWEEP)) == READINESS_STABLE_NO_SWEEP
+    ]
+
+
+def experimental_cases():
+    return [
+        key
+        for key, value in DEMO_CASES.items()
+        if effective_case_readiness(key, value.get("readiness", READINESS_STABLE_NO_SWEEP)) == READINESS_EXPERIMENTAL
+    ]
+
+
+def disabled_cases():
+    return [
+        key
+        for key, value in DEMO_CASES.items()
+        if effective_case_readiness(key, value.get("readiness", READINESS_STABLE_NO_SWEEP)) == READINESS_DISABLED
+    ]

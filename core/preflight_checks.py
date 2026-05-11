@@ -9,6 +9,8 @@ from typing import List, Tuple
 
 from core.runtime_backend import resolve_llm_backend
 
+MAC_TEXBIN = "/Library/TeX/texbin"
+
 
 @dataclass
 class PreflightCheck:
@@ -103,8 +105,14 @@ def _check_packages(resolution) -> PreflightCheck:
 
 
 def _check_ngspice() -> PreflightCheck:
-    candidate = os.getenv("NGSPICE_PATH", "").strip() or shutil.which("ngspice")
-    if candidate and os.path.exists(candidate):
+    candidates = [
+        os.getenv("NGSPICE_PATH", "").strip(),
+        shutil.which("ngspice"),
+        "/opt/homebrew/bin/ngspice",
+        "/usr/local/bin/ngspice",
+    ]
+    candidate = next((item for item in candidates if item and os.path.exists(item)), None)
+    if candidate:
         return PreflightCheck(
             name="ngspice availability",
             status="PASS",
@@ -213,6 +221,98 @@ def _check_llm_backend(resolution) -> PreflightCheck:
     )
 
 
+def _check_hf_netlist_backend() -> PreflightCheck:
+    has_client = importlib.util.find_spec("gradio_client") is not None
+    enabled = os.getenv("USE_HF_NETLIST", "0").strip() == "1"
+    space_id = os.getenv("HF_SPACE_ID", "potatoman869/spice_netlist-generator").strip()
+    details = [
+        f"gradio_client={'installed' if has_client else 'missing'}",
+        f"USE_HF_NETLIST={'1' if enabled else '0'}",
+        f"HF_SPACE_ID={space_id or 'not set'}",
+    ]
+
+    if os.getenv("RUN_HF_PREFLIGHT", "0").strip() == "1" and enabled and has_client and space_id:
+        try:
+            from gradio_client import Client
+
+            Client(space_id)
+            details.append("lightweight connection object created")
+        except Exception as exc:
+            return PreflightCheck(
+                name="Hugging Face netlist backend",
+                status="WARN",
+                detail="; ".join(details + [f"connection test failed: {exc}"]),
+            )
+
+    if enabled and has_client and space_id:
+        return PreflightCheck(
+            name="Hugging Face netlist backend",
+            status="PASS",
+            detail="; ".join(details),
+        )
+    return PreflightCheck(
+        name="Hugging Face netlist backend",
+        status="WARN",
+        detail="; ".join(details + ["deterministic fallback remains available"]),
+    )
+
+
+def _which_with_tex_path(tool: str) -> str | None:
+    found = shutil.which(tool)
+    if found:
+        return found
+    candidate = Path(MAC_TEXBIN) / tool
+    if candidate.exists():
+        return str(candidate)
+    return None
+
+
+def _check_lcapy_schematic_backend() -> PreflightCheck:
+    has_lcapy = importlib.util.find_spec("lcapy") is not None
+    latex_tools = {
+        "pdflatex": _which_with_tex_path("pdflatex"),
+        "latex": _which_with_tex_path("latex"),
+        "kpsewhich": _which_with_tex_path("kpsewhich"),
+    }
+    circuitikz_detail = "not checked"
+    if latex_tools["kpsewhich"]:
+        try:
+            import subprocess
+
+            env = os.environ.copy()
+            if Path(MAC_TEXBIN).exists():
+                env["PATH"] = os.pathsep.join([MAC_TEXBIN, env.get("PATH", "")])
+            probe = subprocess.run(
+                [latex_tools["kpsewhich"], "circuitikz.sty"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+                env=env,
+            )
+            circuitikz_detail = "found" if probe.returncode == 0 and probe.stdout.strip() else "not found"
+        except Exception as exc:
+            circuitikz_detail = f"check failed: {exc}"
+
+    detail = (
+        f"lcapy={'installed' if has_lcapy else 'missing'}; "
+        f"pdflatex={'found' if latex_tools['pdflatex'] else 'missing'}; "
+        f"latex={'found' if latex_tools['latex'] else 'missing'}; "
+        f"circuitikz={circuitikz_detail}"
+    )
+    if has_lcapy:
+        return PreflightCheck(
+            name="Lcapy schematic backend",
+            status="PASS",
+            detail=detail,
+        )
+    return PreflightCheck(
+        name="Lcapy schematic backend",
+        status="WARN",
+        detail=detail + "; fallback schematic renderer remains available.",
+    )
+
+
 def run_preflight_checks() -> dict:
     llm_resolution = resolve_llm_backend(instantiate=False)
     checks = [
@@ -222,6 +322,8 @@ def run_preflight_checks() -> dict:
         _check_artifacts_dir(),
         _check_llm_backend(llm_resolution),
         _check_device_model_libraries(),
+        _check_hf_netlist_backend(),
+        _check_lcapy_schematic_backend(),
     ]
 
     counts = {

@@ -796,7 +796,7 @@ class SizingAgent(BaseAgent):
             "Vbias": min(vdd - 0.2, 0.7 + Vov),
             "gm_target": gm_target,
             "Vout_q_target": target_vout_q,
-            "Vin_bias": min(vdd - 0.05, target_vout_q + vth + Vov),
+            "Vin_bias": min(vdd - 0.05, target_vout_q + vth + 1.65 * Vov),
         }
         self._annotate_mos_sizing(state["sizing"], constraints, current_key="I_bias")
         return state, SizingReport(True, ["Common-drain source follower initial sizing complete"])

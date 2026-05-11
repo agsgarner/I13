@@ -17,7 +17,7 @@ class FinalShowcaseTests(unittest.TestCase):
         )
         for case_name in FINAL_SHOWCASE_CASES:
             case = get_demo_case(case_name)
-            self.assertEqual(case.get("readiness"), "stable")
+            self.assertEqual(case.get("readiness"), "stable_demo")
 
     def test_showcase_case_markdown_has_required_sections(self):
         final_state = {
